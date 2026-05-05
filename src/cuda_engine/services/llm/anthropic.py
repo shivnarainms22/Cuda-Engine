@@ -26,14 +26,16 @@ class AnthropicClient(LLMClient):
     ) -> LLMResponse:
         started_at = time.time()
         create = cast(Callable[..., Any], self.client.messages.create)
-        response = create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=messages,
-            tools=[tool.model_dump(mode="json") for tool in tools] if tools else None,
-        )
+        request: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system,
+            "messages": messages,
+        }
+        if tools is not None:
+            request["tools"] = [tool.model_dump(mode="json") for tool in tools]
+        response = create(**request)
         text_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         for block in getattr(response, "content", []):

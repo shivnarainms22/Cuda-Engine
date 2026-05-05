@@ -62,3 +62,25 @@ def test_anthropic_client_translates_request_and_parses_response(monkeypatch) ->
     assert response.tokens_out == 7
     assert response.cache_read_tokens == 5
     assert response.latency_seconds >= 0.0
+
+
+def test_anthropic_client_omits_tools_when_none(monkeypatch) -> None:
+    fake_holder = {}
+
+    def fake_factory(api_key: str | None = None):
+        fake = _FakeAnthropic(api_key=api_key)
+        fake_holder["client"] = fake
+        return fake
+
+    monkeypatch.setattr("anthropic.Anthropic", fake_factory)
+    client = AnthropicClient(cfg=SynthesisConfig())
+
+    client.complete(
+        system=[{"type": "text", "text": "sys"}],
+        messages=[{"role": "user", "content": "hello"}],
+        tools=None,
+        model="claude-opus-4-7",
+    )
+
+    fake = fake_holder["client"]
+    assert "tools" not in fake.messages.kwargs
