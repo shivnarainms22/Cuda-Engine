@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -124,8 +125,64 @@ def test_show_report_fails_when_report_is_missing() -> None:
     assert "report.json not found" in result.stdout
 
 
+def test_latest_report_prints_newest_report_summary() -> None:
+    runs_root = _run_dir("runs-root")
+    older = runs_root / "older"
+    newer = runs_root / "newer"
+    older.mkdir()
+    newer.mkdir()
+    _write_report(older, _minimal_report(run_id="older", run_dir=older, spec_name="old_spec"))
+    _write_report(newer, _minimal_report(run_id="newer", run_dir=newer, spec_name="new_spec"))
+    os.utime(older / "report.json", (1_700_000_000, 1_700_000_000))
+    os.utime(newer / "report.json", (1_800_000_000, 1_800_000_000))
+
+    result = CliRunner().invoke(app, ["latest-report", str(runs_root)])
+
+    assert result.exit_code == 0
+    assert "Run: newer" in result.stdout
+    assert "Spec: new_spec" in result.stdout
+    assert f"Artifacts: {newer}" in result.stdout
+    assert "old_spec" not in result.stdout
+
+
+def test_latest_report_fails_when_no_reports_exist() -> None:
+    runs_root = _run_dir("empty-runs")
+
+    result = CliRunner().invoke(app, ["latest-report", str(runs_root)])
+
+    assert result.exit_code == 1
+    assert "no report.json files found" in result.stdout
+
+
 def _write_report(run_dir: Path, payload: dict[str, object]) -> None:
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _minimal_report(*, run_id: str, run_dir: Path, spec_name: str) -> dict[str, object]:
+    return {
+        "passed": True,
+        "run_id": run_id,
+        "artifacts_dir": str(run_dir),
+        "failed_stage": None,
+        "failure_reason": None,
+        "report": {
+            "run_id": run_id,
+            "spec_name": spec_name,
+            "stages_executed": ["interview"],
+            "stage_traces": [],
+            "total_llm_tokens_in": 1,
+            "total_llm_tokens_out": 2,
+            "warnings": [],
+        },
+        "correctness": {
+            "passed": True,
+            "max_abs_err": 0.0,
+            "max_rel_err": 0.0,
+            "shapes_tested": [[128]],
+            "failing_inputs": [],
+        },
+        "performance": None,
+    }
 
 
 def _run_dir(name: str) -> Path:

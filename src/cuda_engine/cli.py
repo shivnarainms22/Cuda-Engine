@@ -19,7 +19,20 @@ def show_report(run_dir: Path) -> None:
     if not report_path.exists():
         typer.echo(f"report.json not found: {report_path}")
         raise typer.Exit(code=1)
+    _print_report_summary(report_path)
 
+
+@app.command("latest-report")
+def latest_report(runs_root: Path) -> None:
+    """Print the newest report.json summary under a runs root."""
+    report_path = _latest_report_path(runs_root)
+    if report_path is None:
+        typer.echo(f"no report.json files found under: {runs_root}")
+        raise typer.Exit(code=1)
+    _print_report_summary(report_path)
+
+
+def _print_report_summary(report_path: Path) -> None:
     payload = _load_report(report_path)
     report = _dict(payload.get("report"))
     correctness = payload.get("correctness")
@@ -57,7 +70,16 @@ def show_report(run_dir: Path) -> None:
     if warnings:
         typer.echo(f"Warnings: {', '.join(warnings)}")
 
-    typer.echo(f"Artifacts: {payload.get('artifacts_dir', str(run_dir))}")
+    typer.echo(f"Artifacts: {payload.get('artifacts_dir', str(report_path.parent))}")
+
+
+def _latest_report_path(runs_root: Path) -> Path | None:
+    if not runs_root.exists():
+        return None
+    report_paths = [path for path in runs_root.rglob("report.json") if path.is_file()]
+    if not report_paths:
+        return None
+    return max(report_paths, key=lambda path: path.stat().st_mtime)
 
 
 def _load_report(report_path: Path) -> dict[str, Any]:
