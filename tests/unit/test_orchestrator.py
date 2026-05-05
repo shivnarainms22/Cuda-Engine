@@ -27,7 +27,8 @@ def test_orchestrator_happy_path_with_mocks() -> None:
                             "input": {"src": "extern code", "target_arch": "sm_80"},
                         }
                     ],
-                )
+                ),
+                "```cuda\n// annotated\nextern code\n```",
             ]
         ),
         gpu=MockGPURunner(
@@ -62,6 +63,7 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
                         }
                     ],
                 ),
+                "```cuda\n// unused because correctness fails\nextern code\n```",
             ]
         ),
         gpu=MockGPURunner(

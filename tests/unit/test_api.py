@@ -29,7 +29,8 @@ def test_synthesize_returns_result_with_mocks() -> None:
                             "input": {"src": "extern code", "target_arch": "sm_80"},
                         }
                     ],
-                )
+                ),
+                "```cuda\n// annotated\nextern code\n```",
             ]
         ),
         _gpu=MockGPURunner(
