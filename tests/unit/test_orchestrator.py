@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from cuda_engine.config import SynthesisConfig
@@ -55,10 +56,23 @@ def test_orchestrator_happy_path_with_mocks() -> None:
     assert result.report.total_llm_tokens_out > 0
     assert all(trace.succeeded for trace in result.report.stage_traces)
     assert store._files[(result.run_id, "inputs/prompt.txt")] == b"noop"
+    persisted = json.loads(store._files[(result.run_id, "report.json")])
+    assert persisted["passed"] is True
+    assert persisted["failed_stage"] is None
+    assert persisted["report"]["stages_executed"] == [
+        "interview",
+        "codegen",
+        "correctness",
+        "performance",
+        "polish",
+    ]
+    assert persisted["correctness"]["passed"] is True
+    assert persisted["performance"]["below_target"] is False
 
 
 def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
     torch = __import__("torch")
+    store = InMemoryStore()
     orchestrator = Orchestrator(
         llm=MockLLMClient(
             responses=[
@@ -80,7 +94,7 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
             compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
             run_results=[RunResult(ok=True, output_tensors=[torch.zeros(128)])],
         ),
-        store=InMemoryStore(),
+        store=store,
         cfg=SynthesisConfig(),
     )
 
@@ -96,3 +110,10 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
         "correctness",
     ]
     assert result.report.stage_traces[-1].succeeded is False
+    persisted = json.loads(store._files[(result.run_id, "report.json")])
+    assert persisted["passed"] is False
+    assert persisted["failed_stage"] == 3
+    assert persisted["failure_reason"] == "correctness check failed"
+    assert persisted["report"]["stage_traces"][-1]["succeeded"] is False
+    assert persisted["correctness"]["passed"] is False
+    assert persisted["performance"] is None

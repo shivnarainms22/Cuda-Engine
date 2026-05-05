@@ -77,7 +77,7 @@ class Orchestrator:
             succeeded=lambda report: report.passed,
         )
         if not correctness.passed:
-            return SynthesisResult.failed(
+            result = SynthesisResult.failed(
                 stage=3,
                 reason="correctness check failed",
                 run_id=run_id,
@@ -90,6 +90,8 @@ class Orchestrator:
                 ),
                 correctness=correctness,
             )
+            _write_result_report(self.store, result)
+            return result
 
         performance = _run_traced_stage(
             stage_traces,
@@ -122,7 +124,7 @@ class Orchestrator:
             wall_time_seconds=time.time() - started_at,
             warnings=["below perf target"] if performance.below_target else [],
         )
-        return SynthesisResult.ok(
+        result = SynthesisResult.ok(
             run_id=run_id,
             artifacts_dir=str(self.store.run_dir(run_id)),
             report=report,
@@ -130,6 +132,8 @@ class Orchestrator:
             performance=performance,
             kernel_callable=None,
         )
+        _write_result_report(self.store, result)
+        return result
 
 
 def _reference_source(reference: Callable[..., Any]) -> str:
@@ -243,3 +247,8 @@ def _build_report(
         wall_time_seconds=wall_time_seconds,
         warnings=warnings or [],
     )
+
+
+def _write_result_report(store: ArtifactStore, result: SynthesisResult) -> None:
+    payload = result.model_dump(mode="json", exclude={"kernel_callable"})
+    store.write_json(result.run_id, "report.json", payload)
