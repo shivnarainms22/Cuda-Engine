@@ -44,6 +44,16 @@ def test_orchestrator_happy_path_with_mocks() -> None:
     assert result.passed is True
     assert result.run_id
     assert result.report.spec_name == "identity"
+    assert [trace.stage_name for trace in result.report.stage_traces] == [
+        "interview",
+        "codegen",
+        "correctness",
+        "performance",
+        "polish",
+    ]
+    assert result.report.total_llm_tokens_in > 0
+    assert result.report.total_llm_tokens_out > 0
+    assert all(trace.succeeded for trace in result.report.stage_traces)
     assert store._files[(result.run_id, "inputs/prompt.txt")] == b"noop"
 
 
@@ -80,3 +90,9 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
     assert result.failed_stage == 3
     assert result.correctness is not None
     assert result.correctness.passed is False
+    assert [trace.stage_name for trace in result.report.stage_traces] == [
+        "interview",
+        "codegen",
+        "correctness",
+    ]
+    assert result.report.stage_traces[-1].succeeded is False

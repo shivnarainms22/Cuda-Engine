@@ -3,18 +3,20 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from cuda_engine.config import SynthesisConfig
-from cuda_engine.models import SynthesisReport, SynthesisResult
+from cuda_engine.models import StageTrace, SynthesisReport, SynthesisResult
 from cuda_engine.services.gpu.base import GPURunner
-from cuda_engine.services.llm.base import LLMClient
+from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.codegen import Stage2Codegen
 from cuda_engine.stages.correctness import Stage3Correctness
 from cuda_engine.stages.interview import Stage1Interview
 from cuda_engine.stages.performance import Stage4Performance
 from cuda_engine.stages.polish import Stage5Polish
+
+T = TypeVar("T")
 
 
 class Orchestrator:
@@ -34,27 +36,45 @@ class Orchestrator:
     def run(self, *, prompt: str, reference: Callable[..., Any], target: str) -> SynthesisResult:
         run_id = self.store.new_run()
         started_at = time.time()
+        llm = _TracingLLMClient(self.llm)
+        stage_traces: list[StageTrace] = []
         self.store.write_text(run_id, "inputs/prompt.txt", prompt)
         self.store.write_json(run_id, "inputs/config.json", self.cfg)
         self.store.write_text(run_id, "inputs/reference.py", _reference_source(reference))
 
-        spec = Stage1Interview(llm=self.llm, store=self.store).run(
-            prompt=prompt,
-            reference=reference,
-            target_arch=target,
-            run_id=run_id,
+        spec = _run_traced_stage(
+            stage_traces,
+            llm,
+            "interview",
+            lambda: Stage1Interview(llm=llm, store=self.store).run(
+                prompt=prompt,
+                reference=reference,
+                target_arch=target,
+                run_id=run_id,
+            ),
         )
-        artifact = Stage2Codegen(llm=self.llm, gpu=self.gpu, store=self.store).run(
-            spec=spec,
-            run_id=run_id,
-            retry_budget=self.cfg.retry_budgets.codegen,
+        artifact = _run_traced_stage(
+            stage_traces,
+            llm,
+            "codegen",
+            lambda: Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
+                spec=spec,
+                run_id=run_id,
+                retry_budget=self.cfg.retry_budgets.codegen,
+            ),
         )
-        correctness = Stage3Correctness(llm=self.llm, gpu=self.gpu, store=self.store).run(
-            spec=spec,
-            artifact=artifact,
-            reference=reference,
-            run_id=run_id,
-            retry_budget=self.cfg.retry_budgets.correctness,
+        correctness = _run_traced_stage(
+            stage_traces,
+            llm,
+            "correctness",
+            lambda: Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
+                spec=spec,
+                artifact=artifact,
+                reference=reference,
+                run_id=run_id,
+                retry_budget=self.cfg.retry_budgets.correctness,
+            ),
+            succeeded=lambda report: report.passed,
         )
         if not correctness.passed:
             return SynthesisResult.failed(
@@ -62,32 +82,43 @@ class Orchestrator:
                 reason="correctness check failed",
                 run_id=run_id,
                 artifacts_dir=str(self.store.run_dir(run_id)),
-                report=SynthesisReport(
+                report=_build_report(
                     run_id=run_id,
                     spec_name=spec.name,
-                    stages_executed=["interview", "codegen", "correctness"],
+                    stage_traces=stage_traces,
+                    wall_time_seconds=time.time() - started_at,
                 ),
                 correctness=correctness,
             )
 
-        performance = Stage4Performance(llm=self.llm, gpu=self.gpu, store=self.store).run(
-            spec=spec,
-            artifact=artifact,
-            run_id=run_id,
-            retry_budget=self.cfg.retry_budgets.performance,
+        performance = _run_traced_stage(
+            stage_traces,
+            llm,
+            "performance",
+            lambda: Stage4Performance(llm=llm, gpu=self.gpu, store=self.store).run(
+                spec=spec,
+                artifact=artifact,
+                run_id=run_id,
+                retry_budget=self.cfg.retry_budgets.performance,
+            ),
         )
-        Stage5Polish(llm=self.llm, store=self.store).run(
-            spec=spec,
-            artifact=artifact,
-            correctness=correctness,
-            performance=performance,
-            run_id=run_id,
+        _run_traced_stage(
+            stage_traces,
+            llm,
+            "polish",
+            lambda: Stage5Polish(llm=llm, store=self.store).run(
+                spec=spec,
+                artifact=artifact,
+                correctness=correctness,
+                performance=performance,
+                run_id=run_id,
+            ),
         )
 
-        report = SynthesisReport(
+        report = _build_report(
             run_id=run_id,
             spec_name=spec.name,
-            stages_executed=["interview", "codegen", "correctness", "performance", "polish"],
+            stage_traces=stage_traces,
             wall_time_seconds=time.time() - started_at,
             warnings=["below perf target"] if performance.below_target else [],
         )
@@ -106,3 +137,109 @@ def _reference_source(reference: Callable[..., Any]) -> str:
         return inspect.getsource(reference)
     except OSError:
         return repr(reference)
+
+
+class _TracingLLMClient(LLMClient):
+    def __init__(self, inner: LLMClient) -> None:
+        self._inner = inner
+        self.responses: list[LLMResponse] = []
+
+    def complete(
+        self,
+        *,
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec] | None = None,
+        model: str,
+        max_tokens: int = 4096,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        response = self._inner.complete(
+            system=system,
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        self.responses.append(response)
+        return response
+
+
+def _run_traced_stage(
+    stage_traces: list[StageTrace],
+    llm: _TracingLLMClient,
+    stage_name: str,
+    action: Callable[[], T],
+    *,
+    succeeded: Callable[[T], bool] | None = None,
+) -> T:
+    response_start = len(llm.responses)
+    started_at = time.time()
+    try:
+        result = action()
+    except Exception:
+        responses = llm.responses[response_start:]
+        stage_traces.append(_build_stage_trace(stage_name, responses, started_at, succeeded=False))
+        raise
+
+    responses = llm.responses[response_start:]
+    stage_traces.append(
+        _build_stage_trace(
+            stage_name,
+            responses,
+            started_at,
+            succeeded=succeeded(result) if succeeded is not None else True,
+        )
+    )
+    return result
+
+
+def _build_stage_trace(
+    stage_name: str,
+    responses: list[LLMResponse],
+    started_at: float,
+    *,
+    succeeded: bool,
+) -> StageTrace:
+    reported_latency = sum(response.latency_seconds for response in responses)
+    return StageTrace(
+        stage_name=stage_name,
+        attempts=max(1, len(responses)),
+        succeeded=succeeded,
+        model_used=_model_summary(responses),
+        tokens_in=sum(response.tokens_in for response in responses),
+        tokens_out=sum(response.tokens_out for response in responses),
+        cache_read_tokens=sum(response.cache_read_tokens for response in responses),
+        latency_seconds=reported_latency if reported_latency > 0 else time.time() - started_at,
+    )
+
+
+def _model_summary(responses: list[LLMResponse]) -> str:
+    if not responses:
+        return "none"
+    models: list[str] = []
+    for response in responses:
+        if response.model not in models:
+            models.append(response.model)
+    return ", ".join(models)
+
+
+def _build_report(
+    *,
+    run_id: str,
+    spec_name: str,
+    stage_traces: list[StageTrace],
+    wall_time_seconds: float,
+    warnings: list[str] | None = None,
+) -> SynthesisReport:
+    return SynthesisReport(
+        run_id=run_id,
+        spec_name=spec_name,
+        stages_executed=[trace.stage_name for trace in stage_traces],
+        stage_traces=stage_traces,
+        total_llm_tokens_in=sum(trace.tokens_in for trace in stage_traces),
+        total_llm_tokens_out=sum(trace.tokens_out for trace in stage_traces),
+        wall_time_seconds=wall_time_seconds,
+        warnings=warnings or [],
+    )
