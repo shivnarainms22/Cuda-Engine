@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cuda-engine"
+version = "0.0.1"
+description = "Plain-English -> verified CUDA kernels via Claude-driven agent loop"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.40",
+    "torch>=2.4",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "pyyaml>=6",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+demo = ["streamlit>=1.36"]
+
+[project.scripts]
+cuda-engine = "cuda_engine.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cuda_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers -p no:cacheprovider"
+markers = [
+    "integration: real LLM + real GPU (slow, costs money)",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/cuda_engine"]

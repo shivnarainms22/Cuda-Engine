@@ -1,0 +1,16 @@
+name: PR
+
+on: [pull_request, push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: mypy src/
+      - run: pytest tests/unit -v --cov=cuda_engine --cov-report=term-missing -m "not integration"
