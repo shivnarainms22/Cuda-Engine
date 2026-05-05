@@ -47,6 +47,7 @@ def _print_report_summary(report_path: Path) -> None:
         f"{int(report.get('total_llm_tokens_in', 0))} in / "
         f"{int(report.get('total_llm_tokens_out', 0))} out"
     )
+    _print_stage_traces(report.get("stage_traces"))
 
     if not payload.get("passed"):
         typer.echo(f"Failed stage: {payload.get('failed_stage')}")
@@ -102,6 +103,24 @@ def _strings(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _print_stage_traces(value: object) -> None:
+    if not isinstance(value, list) or not value:
+        return
+
+    typer.echo("Stage traces:")
+    for item in value:
+        trace = _dict(item)
+        status = "ok" if trace.get("succeeded") else "failed"
+        typer.echo(
+            f"- {trace.get('stage_name', 'unknown')}: "
+            f"{status} "
+            f"attempts={int(trace.get('attempts', 0))} "
+            f"model={trace.get('model_used', 'unknown')} "
+            f"tokens={int(trace.get('tokens_in', 0))}/{int(trace.get('tokens_out', 0))} "
+            f"cache_read={int(trace.get('cache_read_tokens', 0))}"
+        )
 
 
 def _print_correctness(correctness: dict[str, Any]) -> None:

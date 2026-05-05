@@ -32,10 +32,30 @@ def test_show_report_prints_compact_success_summary() -> None:
                         "tokens_out": 20,
                         "cache_read_tokens": 0,
                         "latency_seconds": 1.2,
+                    },
+                    {
+                        "stage_name": "codegen",
+                        "attempts": 2,
+                        "succeeded": True,
+                        "model_used": "claude-sonnet-4-6",
+                        "tokens_in": 30,
+                        "tokens_out": 40,
+                        "cache_read_tokens": 5,
+                        "latency_seconds": 2.3,
+                    },
+                    {
+                        "stage_name": "correctness",
+                        "attempts": 1,
+                        "succeeded": True,
+                        "model_used": "none",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "cache_read_tokens": 0,
+                        "latency_seconds": 0.4,
                     }
                 ],
-                "total_llm_tokens_in": 10,
-                "total_llm_tokens_out": 20,
+                "total_llm_tokens_in": 40,
+                "total_llm_tokens_out": 60,
                 "total_cost_usd": 0.0,
                 "wall_time_seconds": 3.4,
                 "warnings": [],
@@ -62,7 +82,11 @@ def test_show_report_prints_compact_success_summary() -> None:
     assert "Status: PASS" in result.stdout
     assert "Spec: vector_add_fp32" in result.stdout
     assert "Stages: interview -> codegen -> correctness -> performance -> polish" in result.stdout
-    assert "LLM tokens: 10 in / 20 out" in result.stdout
+    assert "LLM tokens: 40 in / 60 out" in result.stdout
+    assert "Stage traces:" in result.stdout
+    assert "- interview: ok attempts=1 model=claude-opus-4-7 tokens=10/20 cache_read=0" in result.stdout
+    assert "- codegen: ok attempts=2 model=claude-sonnet-4-6 tokens=30/40 cache_read=5" in result.stdout
+    assert "- correctness: ok attempts=1 model=none tokens=0/0 cache_read=0" in result.stdout
     assert "Correctness: PASS" in result.stdout
     assert "Performance: speedup_vs_reference=1.50, speedup_vs_torch_compile=1.10" in result.stdout
     assert f"Artifacts: {run_dir}" in result.stdout
@@ -112,6 +136,8 @@ def test_show_report_prints_failure_summary() -> None:
     assert "Status: FAIL" in result.stdout
     assert "Failed stage: 3" in result.stdout
     assert "Reason: correctness check failed" in result.stdout
+    assert "Stage traces:" in result.stdout
+    assert "- correctness: failed attempts=1 model=none tokens=0/0 cache_read=0" in result.stdout
     assert "Correctness: FAIL max_abs_err=inf max_rel_err=inf" in result.stdout
     assert "First failure: shape=[128] error=backend mismatch" in result.stdout
     assert "Warnings: below perf target" in result.stdout
