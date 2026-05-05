@@ -58,14 +58,7 @@ def _print_report_summary(report_path: Path) -> None:
     else:
         typer.echo("Correctness: not available")
 
-    if isinstance(performance, dict):
-        typer.echo(
-            "Performance: "
-            f"speedup_vs_reference={float(performance.get('speedup_vs_reference', 0.0)):.2f}, "
-            f"speedup_vs_torch_compile={float(performance.get('speedup_vs_torch_compile', 0.0)):.2f}"
-        )
-    else:
-        typer.echo("Performance: not available")
+    _print_performance(performance, report_path.parent)
 
     warnings = _strings(report.get("warnings"))
     if warnings:
@@ -141,3 +134,29 @@ def _print_correctness(correctness: dict[str, Any]) -> None:
             f"shape={first_failure.get('shape')} "
             f"error={first_failure.get('error')}"
         )
+
+
+def _print_performance(performance: object, run_dir: Path) -> None:
+    if not isinstance(performance, dict):
+        typer.echo("Performance: not available")
+        return
+
+    typer.echo(
+        "Performance: "
+        f"speedup_vs_reference={float(performance.get('speedup_vs_reference', 0.0)):.2f}, "
+        f"speedup_vs_torch_compile={float(performance.get('speedup_vs_torch_compile', 0.0)):.2f}"
+    )
+
+    achieved_gbps = performance.get("achieved_gbps")
+    if achieved_gbps is not None:
+        typer.echo(f"Bandwidth: achieved_gbps={float(achieved_gbps):.2f}")
+
+    typer.echo(f"Below target: {str(bool(performance.get('below_target', False))).lower()}")
+
+    notes = _strings(performance.get("notes"))
+    if notes:
+        typer.echo(f"Performance notes: {', '.join(notes)}")
+
+    benchmark_path = run_dir / "stage4_performance" / "benchmark.json"
+    if benchmark_path.exists():
+        typer.echo(f"Benchmark: {benchmark_path}")

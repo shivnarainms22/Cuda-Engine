@@ -70,10 +70,15 @@ def test_show_report_prints_compact_success_summary() -> None:
             "performance": {
                 "speedup_vs_reference": 1.5,
                 "speedup_vs_torch_compile": 1.1,
+                "achieved_gbps": 512.25,
                 "below_target": False,
+                "notes": ["benchmark stable"],
             },
         },
     )
+    benchmark_path = run_dir / "stage4_performance" / "benchmark.json"
+    benchmark_path.parent.mkdir()
+    benchmark_path.write_text("{}", encoding="utf-8")
 
     result = CliRunner().invoke(app, ["show-report", str(run_dir)])
 
@@ -89,6 +94,10 @@ def test_show_report_prints_compact_success_summary() -> None:
     assert "- correctness: ok attempts=1 model=none tokens=0/0 cache_read=0" in result.stdout
     assert "Correctness: PASS" in result.stdout
     assert "Performance: speedup_vs_reference=1.50, speedup_vs_torch_compile=1.10" in result.stdout
+    assert "Bandwidth: achieved_gbps=512.25" in result.stdout
+    assert "Below target: false" in result.stdout
+    assert "Performance notes: benchmark stable" in result.stdout
+    assert f"Benchmark: {benchmark_path}" in result.stdout
     assert f"Artifacts: {run_dir}" in result.stdout
 
 
