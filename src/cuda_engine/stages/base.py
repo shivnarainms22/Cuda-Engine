@@ -3,6 +3,10 @@ from cuda_engine.services.llm.base import LLMClient
 from cuda_engine.services.store.base import ArtifactStore
 
 
+class BudgetExhaustedError(RuntimeError):
+    """Raised when a stage exhausts its retry budget without producing a valid result."""
+
+
 class Stage:
     name: str = "stage"
 

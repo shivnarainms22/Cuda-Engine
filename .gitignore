@@ -12,6 +12,7 @@ build/
 htmlcov/
 .cache/
 .tmp/
+.test_artifacts/
 runs/
 *.so
 *.cubin

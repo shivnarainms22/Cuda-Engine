@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable
 from typing import Any
@@ -33,6 +34,9 @@ class Orchestrator:
     def run(self, *, prompt: str, reference: Callable[..., Any], target: str) -> SynthesisResult:
         run_id = self.store.new_run()
         started_at = time.time()
+        self.store.write_text(run_id, "inputs/prompt.txt", prompt)
+        self.store.write_json(run_id, "inputs/config.json", self.cfg)
+        self.store.write_text(run_id, "inputs/reference.py", _reference_source(reference))
 
         spec = Stage1Interview(llm=self.llm, store=self.store).run(
             prompt=prompt,
@@ -95,3 +99,10 @@ class Orchestrator:
             performance=performance,
             kernel_callable=None,
         )
+
+
+def _reference_source(reference: Callable[..., Any]) -> str:
+    try:
+        return inspect.getsource(reference)
+    except OSError:
+        return repr(reference)
