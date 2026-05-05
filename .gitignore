@@ -20,3 +20,4 @@ runs/
 .DS_Store
 .idea/
 .vscode/
+.agentbridge/

@@ -1,3 +1,5 @@
+import pickle
+import subprocess
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,3 +58,58 @@ def test_local_gpu_runner_raises_clear_error_when_nvcc_missing(monkeypatch) -> N
 
     assert result.ok is False
     assert "nvcc not found" in result.errors[0]
+
+
+def test_local_gpu_runner_run_kernel_uses_subprocess_and_reads_outputs(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        seen["cmd"] = cmd
+        seen["timeout"] = timeout
+        output_path = Path(cmd[cmd.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            pickle.dump({"ok": True, "outputs": ["out"], "stdout": "child out", "stderr": ""}, f)
+        return SimpleNamespace(returncode=0, stdout="parent out", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.run_kernel(Path("/tmp/kernel.so"), inputs=["in"], timeout_seconds=7)
+
+    assert result.ok is True
+    assert result.output_tensors == ["out"]
+    assert result.stdout == "child out\nparent out"
+    assert seen["timeout"] == 7
+    assert "cuda_engine.services.gpu._run_kernel_child" in seen["cmd"]
+
+
+def test_local_gpu_runner_run_kernel_reports_child_failure(monkeypatch) -> None:
+    def fake_run(cmd, capture_output, text, timeout, check):
+        output_path = Path(cmd[cmd.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            pickle.dump({"ok": False, "outputs": None, "stdout": "", "stderr": "boom"}, f)
+        return SimpleNamespace(returncode=0, stdout="", stderr="parent err")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.run_kernel(Path("/tmp/kernel.so"), inputs=[], timeout_seconds=7)
+
+    assert result.ok is False
+    assert result.stderr == "boom\nparent err"
+
+
+def test_local_gpu_runner_run_kernel_timeout(monkeypatch) -> None:
+    def fake_run(cmd, capture_output, text, timeout, check):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout, output="out", stderr="err")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.run_kernel(Path("/tmp/kernel.so"), inputs=[], timeout_seconds=2)
+
+    assert result.ok is False
+    assert result.timed_out is True
+    assert "timed out after 2s" in result.stderr

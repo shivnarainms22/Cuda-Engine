@@ -1,6 +1,10 @@
 import hashlib
+import pickle
 import shutil
 import subprocess
+import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +93,64 @@ class LocalGPURunner(GPURunner):
         inputs: list[Any],
         timeout_seconds: int = 30,
     ) -> RunResult:
-        raise NotImplementedError("LocalGPURunner lands in M1")
+        run_dir = self.cache_root / "run_tmp" / uuid.uuid4().hex
+        run_dir.mkdir(parents=True, exist_ok=True)
+        input_path = run_dir / "inputs.pkl"
+        output_path = run_dir / "outputs.pkl"
+        with input_path.open("wb") as f:
+            pickle.dump(inputs, f)
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "cuda_engine.services.gpu._run_kernel_child",
+            "--so",
+            str(so_path),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ]
+        started_at = time.time()
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _stringify_timeout_stream(exc.output)
+            stderr = _stringify_timeout_stream(exc.stderr)
+            return RunResult(
+                ok=False,
+                stdout=stdout,
+                stderr=f"run_kernel timed out after {timeout_seconds}s\n{stderr}".strip(),
+                timed_out=True,
+                wall_seconds=time.time() - started_at,
+            )
+
+        if not output_path.exists():
+            return RunResult(
+                ok=False,
+                stdout=completed.stdout,
+                stderr=completed.stderr or "run_kernel child produced no output payload",
+                wall_seconds=time.time() - started_at,
+            )
+
+        with output_path.open("rb") as f:
+            payload = pickle.load(f)
+        child_stdout = str(payload.get("stdout", ""))
+        child_stderr = str(payload.get("stderr", ""))
+        return RunResult(
+            ok=bool(payload.get("ok", False)) and completed.returncode == 0,
+            output_tensors=payload.get("outputs"),
+            stdout=_join_streams(child_stdout, completed.stdout),
+            stderr=_join_streams(child_stderr, completed.stderr),
+            timed_out=False,
+            wall_seconds=time.time() - started_at,
+        )
 
     def profile(self, so_path: Path, inputs: list[Any]) -> NsightMetrics:
         raise NotImplementedError("LocalGPURunner lands in M1")
@@ -112,3 +173,15 @@ def _extract_error_lines(log: str) -> list[str]:
 
 def _extract_warning_lines(log: str) -> list[str]:
     return [line.strip() for line in log.splitlines() if "warning" in line.lower()]
+
+
+def _join_streams(*parts: str) -> str:
+    return "\n".join(part for part in (p.strip() for p in parts) if part)
+
+
+def _stringify_timeout_stream(stream: str | bytes | None) -> str:
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode(errors="replace")
+    return stream
