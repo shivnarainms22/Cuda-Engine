@@ -1,6 +1,12 @@
 import inspect
 
-from cuda_engine.services.gpu.base import CompileResult, GPURunner, NsightMetrics, RunResult
+from cuda_engine.services.gpu.base import (
+    BenchmarkResult,
+    CompileResult,
+    GPURunner,
+    NsightMetrics,
+    RunResult,
+)
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.store.base import ArtifactStore
 
@@ -14,10 +20,11 @@ def test_llm_client_is_abstract() -> None:
 
 def test_gpu_runner_is_abstract() -> None:
     assert inspect.isabstract(GPURunner)
-    for method_name in ("compile", "run_kernel", "profile"):
+    for method_name in ("compile", "run_kernel", "benchmark_kernel", "profile"):
         assert method_name in dir(GPURunner)
     assert CompileResult
     assert RunResult
+    assert BenchmarkResult
     assert NsightMetrics
 
 

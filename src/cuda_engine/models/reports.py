@@ -20,6 +20,7 @@ class PerformanceReport(BaseModel):
     regs_per_thread: int | None = None
     spill_bytes: int = 0
     below_target: bool = False
+    notes: list[str] = Field(default_factory=list)
 
 
 class StageTrace(BaseModel):

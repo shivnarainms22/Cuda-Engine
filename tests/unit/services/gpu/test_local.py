@@ -147,3 +147,63 @@ def test_local_gpu_runner_run_kernel_timeout(monkeypatch) -> None:
     assert result.ok is False
     assert result.timed_out is True
     assert "timed out after 2s" in result.stderr
+
+
+def test_local_gpu_runner_benchmark_kernel_uses_subprocess_and_reads_payload(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        seen["cmd"] = cmd
+        output_path = Path(cmd[cmd.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            pickle.dump(
+                {
+                    "ok": True,
+                    "benchmark": {
+                        "ok": True,
+                        "custom_ms": 0.25,
+                        "baseline_ms": 1.0,
+                        "warmup_iterations": 3,
+                        "timed_iterations": 11,
+                    },
+                    "stdout": "",
+                    "stderr": "",
+                },
+                f,
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.benchmark_kernel(
+        Path("/tmp/kernel.so"),
+        inputs=["in"],
+        warmup_iterations=3,
+        timed_iterations=11,
+        timeout_seconds=9,
+    )
+
+    assert result.ok is True
+    assert result.custom_ms == 0.25
+    assert result.baseline_ms == 1.0
+    assert "--benchmark" in seen["cmd"]
+    assert "11" in seen["cmd"]
+
+
+def test_local_gpu_runner_benchmark_kernel_reports_child_failure(monkeypatch) -> None:
+    def fake_run(cmd, capture_output, text, timeout, check):
+        output_path = Path(cmd[cmd.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            pickle.dump({"ok": False, "stdout": "", "stderr": "benchmark boom"}, f)
+        return SimpleNamespace(returncode=0, stdout="", stderr="parent err")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.benchmark_kernel(Path("/tmp/kernel.so"), inputs=[], timeout_seconds=9)
+
+    assert result.ok is False
+    assert result.stderr == "benchmark boom\nparent err"

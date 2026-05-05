@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from cuda_engine.config import SynthesisConfig
-from cuda_engine.services.gpu.base import CompileResult, GPURunner, NsightMetrics, RunResult
+from cuda_engine.services.gpu.base import (
+    BenchmarkResult,
+    CompileResult,
+    GPURunner,
+    NsightMetrics,
+    RunResult,
+)
 
 
 class LocalGPURunner(GPURunner):
@@ -151,6 +157,87 @@ class LocalGPURunner(GPURunner):
             stderr=_join_streams(child_stderr, completed.stderr),
             timed_out=False,
             wall_seconds=time.time() - started_at,
+        )
+
+    def benchmark_kernel(
+        self,
+        so_path: Path,
+        inputs: list[Any],
+        *,
+        warmup_iterations: int = 10,
+        timed_iterations: int = 50,
+        timeout_seconds: int = 60,
+    ) -> BenchmarkResult:
+        run_dir = self.cache_root / "run_tmp" / uuid.uuid4().hex
+        run_dir.mkdir(parents=True, exist_ok=True)
+        input_path = run_dir / "inputs.pkl"
+        output_path = run_dir / "benchmark.pkl"
+        with input_path.open("wb") as f:
+            pickle.dump(inputs, f)
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "cuda_engine.services.gpu._run_kernel_child",
+            "--so",
+            str(so_path),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--benchmark",
+            "--warmup-iterations",
+            str(warmup_iterations),
+            "--timed-iterations",
+            str(timed_iterations),
+        ]
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _stringify_timeout_stream(exc.output)
+            stderr = _stringify_timeout_stream(exc.stderr)
+            return BenchmarkResult(
+                ok=False,
+                stdout=stdout,
+                stderr=f"benchmark_kernel timed out after {timeout_seconds}s\n{stderr}".strip(),
+                timed_out=True,
+                warmup_iterations=warmup_iterations,
+                timed_iterations=timed_iterations,
+            )
+
+        if not output_path.exists():
+            return BenchmarkResult(
+                ok=False,
+                stdout=completed.stdout,
+                stderr=completed.stderr or "benchmark child produced no output payload",
+                warmup_iterations=warmup_iterations,
+                timed_iterations=timed_iterations,
+            )
+
+        with output_path.open("rb") as f:
+            payload = pickle.load(f)
+        benchmark_payload = payload.get("benchmark")
+        if not isinstance(benchmark_payload, dict):
+            return BenchmarkResult(
+                ok=False,
+                stdout=_join_streams(str(payload.get("stdout", "")), completed.stdout),
+                stderr=_join_streams(str(payload.get("stderr", "")), completed.stderr),
+                warmup_iterations=warmup_iterations,
+                timed_iterations=timed_iterations,
+            )
+        benchmark = BenchmarkResult.model_validate(benchmark_payload)
+        return benchmark.model_copy(
+            update={
+                "ok": benchmark.ok and completed.returncode == 0,
+                "stdout": _join_streams(str(payload.get("stdout", "")), completed.stdout),
+                "stderr": _join_streams(str(payload.get("stderr", "")), completed.stderr),
+            }
         )
 
     def profile(self, so_path: Path, inputs: list[Any]) -> NsightMetrics:

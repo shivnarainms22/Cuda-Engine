@@ -28,6 +28,18 @@ def test_local_gpu_runner_runs_known_good_torch_custom_op() -> None:
     assert run_result.output_tensors is not None
     torch.testing.assert_close(run_result.output_tensors[0], x + y)
 
+    benchmark = runner.benchmark_kernel(
+        Path(compile_result.so_path),
+        [x, y],
+        warmup_iterations=2,
+        timed_iterations=5,
+        timeout_seconds=30,
+    )
+    assert benchmark.ok, benchmark.stderr
+    assert benchmark.custom_ms > 0
+    assert benchmark.baseline_ms is not None
+    assert benchmark.baseline_ms > 0
+
 
 def _custom_op_vector_add_src() -> str:
     return r'''
