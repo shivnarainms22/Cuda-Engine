@@ -1,5 +1,7 @@
+from pathlib import Path
+
 from cuda_engine import SynthesisConfig, SynthesisResult, synthesize
-from cuda_engine.services.gpu.base import CompileResult
+from cuda_engine.services.gpu.base import CompileResult, RunResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.llm.base import LLMResponse
 from cuda_engine.services.llm.mocks import MockLLMClient
@@ -9,6 +11,7 @@ SPEC_JSON = """{"name":"identity","target_arch":"sm_80","inputs":[{"name":"x","d
 
 
 def test_synthesize_returns_result_with_mocks() -> None:
+    torch = __import__("torch")
     result = synthesize(
         prompt="noop",
         reference=lambda x: x,
@@ -29,7 +32,10 @@ def test_synthesize_returns_result_with_mocks() -> None:
                 )
             ]
         ),
-        _gpu=MockGPURunner(compile_results=[CompileResult(ok=True, log="ok")]),
+        _gpu=MockGPURunner(
+            compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
+            run_results=[RunResult(ok=True, output_tensors=[torch.arange(128.0)])],
+        ),
         _store=InMemoryStore(),
     )
 
