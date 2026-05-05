@@ -71,6 +71,7 @@ class Stage2Codegen(Stage):
                 extra_flags=extra_flags,
             )
             self.store.write_text(run_id, f"{attempt_dir}/compile.log", last_result.log)
+            self.store.write_text(run_id, f"{attempt_dir}/compile_log.txt", last_result.log)
             self.store.write_json(run_id, f"{attempt_dir}/result.json", last_result)
 
             if last_result.ok:
@@ -108,7 +109,7 @@ class Stage2Codegen(Stage):
 
         raise BudgetExhaustedError(
             f"codegen exhausted retry budget after {retry_budget} attempts: "
-            f"{last_result.errors if last_result else 'no compile result'}"
+            f"{_exhausted_budget_detail(last_result)}"
         )
 
 
@@ -129,3 +130,9 @@ def _source_from_response(text: str, tool_calls: list[dict[str, Any]]) -> str:
     if match:
         return match.group(1).strip()
     return text.strip()
+
+
+def _exhausted_budget_detail(last_result: CompileResult | None) -> str:
+    if last_result is None:
+        return "no compile result"
+    return f"errors={last_result.errors}; compile_log={last_result.log}"

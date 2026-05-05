@@ -51,6 +51,7 @@ def test_stage2_codegen_happy_path_routes_compile_tool_call() -> None:
 
 
 def test_stage2_codegen_retries_after_compile_error() -> None:
+    store = InMemoryStore()
     llm = MockLLMClient([_compile_call("bad"), _compile_call("fixed")])
     gpu = MockGPURunner(
         compile_results=[
@@ -58,26 +59,34 @@ def test_stage2_codegen_retries_after_compile_error() -> None:
             CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),
         ]
     )
-    stage = Stage2Codegen(llm=llm, gpu=gpu, store=InMemoryStore())
+    stage = Stage2Codegen(llm=llm, gpu=gpu, store=store)
 
     artifact = stage.run(spec=_spec(), run_id="run123", retry_budget=3)
 
     assert artifact.kernel_cu_path.as_posix().endswith("stage2_codegen/final/kernel.cu")
     assert artifact.kernel_so_path == Path("/tmp/kernel.so")
     assert llm.call_count == 2
+    assert store._files[("run123", "stage2_codegen/attempt_01/compile_log.txt")] == b"bad"
+    assert "Compilation failed" in llm.calls[1]["messages"][-1]["content"]
+    assert "Compile log:\nbad" in llm.calls[1]["messages"][-1]["content"]
 
 
 def test_stage2_codegen_raises_when_retry_budget_exhausted() -> None:
+    store = InMemoryStore()
     stage = Stage2Codegen(
         llm=MockLLMClient([_compile_call("bad1"), _compile_call("bad2")]),
         gpu=MockGPURunner(
             compile_results=[
                 CompileResult(ok=False, log="bad1", errors=["bad1"]),
-                CompileResult(ok=False, log="bad2", errors=["bad2"]),
+                CompileResult(ok=False, log="last nvcc log", errors=["bad2"]),
             ]
         ),
-        store=InMemoryStore(),
+        store=store,
     )
 
-    with pytest.raises(BudgetExhaustedError, match="codegen exhausted retry budget"):
+    with pytest.raises(BudgetExhaustedError) as exc_info:
         stage.run(spec=_spec(), run_id="run123", retry_budget=2)
+    assert "codegen exhausted retry budget" in str(exc_info.value)
+    assert "last nvcc log" in str(exc_info.value)
+    assert store._files[("run123", "stage2_codegen/attempt_01/compile_log.txt")] == b"bad1"
+    assert store._files[("run123", "stage2_codegen/attempt_02/compile_log.txt")] == b"last nvcc log"
