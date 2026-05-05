@@ -10,6 +10,7 @@ from cuda_engine.models import (
 from cuda_engine.services.gpu.base import RunResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.store.mocks import InMemoryStore
+from cuda_engine.stages import correctness
 from cuda_engine.stages.correctness import Stage3Correctness
 
 
@@ -77,3 +78,44 @@ def test_stage3_correctness_fails_when_kernel_run_fails() -> None:
 
     assert report.passed is False
     assert report.failing_inputs[0]["error"] == "launch failed"
+
+
+def test_stage3_input_generation_uses_cuda_when_available(monkeypatch) -> None:
+    class FakeTensor:
+        def __init__(self, calls: list[tuple[str, object]]) -> None:
+            self.calls = calls
+
+        def reshape(self, shape):
+            self.calls.append(("reshape", shape))
+            return self
+
+        def to(self, **kwargs):
+            self.calls.append(("to", kwargs))
+            return self
+
+        def __add__(self, other):
+            self.calls.append(("add", other))
+            return self
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+    class FakeTorch:
+        float32 = "float32"
+        cuda = FakeCuda()
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def arange(self, n, dtype):
+            self.calls.append(("arange", {"n": n, "dtype": dtype}))
+            return FakeTensor(self.calls)
+
+    fake_torch = FakeTorch()
+    monkeypatch.setattr(correctness, "_torch", lambda: fake_torch)
+
+    correctness._make_inputs(_identity_spec(), shape=(128,))
+
+    assert ("to", {"dtype": "float32", "device": "cuda"}) in fake_torch.calls

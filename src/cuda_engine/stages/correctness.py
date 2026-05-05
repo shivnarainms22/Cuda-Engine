@@ -87,16 +87,19 @@ class Stage3Correctness(Stage):
 
 def _make_inputs(spec: KernelSpec, *, shape: tuple[int, ...]) -> list[Any]:
     torch = _torch()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs: list[Any] = []
     for index, arg in enumerate(spec.inputs):
         tensor_shape = _concrete_shape(arg.shape, fallback=shape)
         if arg.dtype in {"fp32", "fp16", "bf16", "fp64"}:
             dtype = getattr(torch, _torch_dtype_name(arg.dtype))
             value = torch.arange(_numel(tensor_shape), dtype=torch.float32).reshape(tensor_shape)
-            inputs.append(value.to(dtype=dtype) + index)
+            inputs.append(value.to(dtype=dtype, device=device) + index)
         elif arg.dtype in {"int32", "int64", "uint8", "int8"}:
             dtype = getattr(torch, _torch_dtype_name(arg.dtype))
-            inputs.append(torch.arange(_numel(tensor_shape), dtype=dtype).reshape(tensor_shape))
+            inputs.append(
+                torch.arange(_numel(tensor_shape), dtype=dtype).reshape(tensor_shape).to(device=device)
+            )
         else:
             raise ValueError(f"Unsupported dtype for correctness input generation: {arg.dtype}")
     return inputs
