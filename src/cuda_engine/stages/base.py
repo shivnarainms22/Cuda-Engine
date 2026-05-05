@@ -7,6 +7,10 @@ class BudgetExhaustedError(RuntimeError):
     """Raised when a stage exhausts its retry budget without producing a valid result."""
 
 
+class StructuralStageError(RuntimeError):
+    """Raised when a stage cannot produce structurally valid data."""
+
+
 class Stage:
     name: str = "stage"
 
