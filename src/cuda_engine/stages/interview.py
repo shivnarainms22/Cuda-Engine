@@ -80,6 +80,7 @@ def _parse_kernel_spec(text: str) -> KernelSpec:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise StructuralStageError(f"KernelSpec JSON could not be decoded: {exc}") from exc
+    _normalize_kernel_spec_dict(data)
     try:
         return KernelSpec.model_validate(data)
     except ValidationError as exc:
@@ -94,3 +95,18 @@ def _extract_json(text: str) -> str:
     if stripped.startswith("{") and stripped.endswith("}"):
         return stripped
     raise StructuralStageError("KernelSpec JSON was not found in interview response")
+
+
+def _normalize_kernel_spec_dict(data: object) -> None:
+    if not isinstance(data, dict):
+        return
+    for section in ("inputs", "outputs"):
+        args = data.get(section)
+        if not isinstance(args, list):
+            continue
+        for arg in args:
+            if not isinstance(arg, dict):
+                continue
+            layout_hint = arg.get("layout_hint")
+            if layout_hint in {"contiguous", "c_contiguous", "strided_contiguous"}:
+                arg["layout_hint"] = "row_major"

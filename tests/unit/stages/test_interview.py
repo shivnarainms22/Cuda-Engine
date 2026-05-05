@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from cuda_engine.services.llm.mocks import MockLLMClient
 from cuda_engine.services.store.mocks import InMemoryStore
 from cuda_engine.stages.base import StructuralStageError
-from cuda_engine.stages.interview import Stage1Interview, _introspect_reference
+from cuda_engine.stages.interview import Stage1Interview, _introspect_reference, _parse_kernel_spec
 
 
 def test_stage1_interview_parses_kernel_spec_from_fenced_json() -> None:
@@ -47,6 +47,24 @@ def test_stage1_interview_rejects_invalid_json() -> None:
 
     with pytest.raises(StructuralStageError, match="KernelSpec JSON"):
         stage.run(prompt="bad", reference=lambda x: x, target_arch="sm_80", run_id="run123")
+
+
+def test_stage1_interview_normalizes_contiguous_layout_hint() -> None:
+    spec = _parse_kernel_spec(
+        """```json
+{
+  "name": "vector_add",
+  "target_arch": "sm_80",
+  "inputs": [{"name": "x", "dtype": "fp32", "shape": ["N"], "layout_hint": "contiguous"}],
+  "outputs": [{"name": "out", "dtype": "fp32", "shape": ["N"], "layout_hint": "contiguous"}],
+  "precision_tolerance": {"rtol": 1e-5, "atol": 1e-6},
+  "optimization_priority": "throughput"
+}
+```"""
+    )
+
+    assert spec.inputs[0].layout_hint == "row_major"
+    assert spec.outputs[0].layout_hint == "row_major"
 
 
 def test_stage1_interview_returns_frozen_spec() -> None:
