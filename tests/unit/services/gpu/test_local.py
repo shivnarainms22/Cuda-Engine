@@ -35,6 +35,40 @@ def test_local_gpu_runner_cache_hit_skips_second_compile(monkeypatch) -> None:
     assert "--foo" in calls[0]
 
 
+def test_local_gpu_runner_adds_torch_extension_flags_for_custom_op(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/cuda/bin/nvcc")
+    monkeypatch.setattr(
+        "cuda_engine.services.gpu.local._torch_extension_flags",
+        lambda src="": (
+            "-I/torch/include",
+            "-I/python/include",
+            "-L/torch/lib",
+            "-ltorch",
+        ),
+    )
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        calls.append(cmd)
+        out_path = Path(cmd[cmd.index("-o") + 1])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"so")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+    src = f'#include <torch/extension.h>\nTORCH_LIBRARY(x_{uuid.uuid4().hex}, m) {{}}'
+
+    result = runner.compile(src, target_arch="sm_80")
+
+    assert result.ok is True
+    assert "-I/torch/include" in calls[0]
+    assert "-I/python/include" in calls[0]
+    assert "-L/torch/lib" in calls[0]
+    assert "-ltorch" in calls[0]
+
+
 def test_local_gpu_runner_compile_failure_populates_errors(monkeypatch) -> None:
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/cuda/bin/nvcc")
 

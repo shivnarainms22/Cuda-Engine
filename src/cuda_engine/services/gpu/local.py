@@ -3,10 +3,11 @@ import pickle
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.services.gpu.base import CompileResult, GPURunner, NsightMetrics, RunResult
@@ -34,7 +35,7 @@ class LocalGPURunner(GPURunner):
         if nvcc is None:
             return CompileResult(ok=False, errors=["nvcc not found on PATH"], log="nvcc not found")
 
-        flags = (*self.cfg.nvcc_flags, *extra_flags)
+        flags = (*self.cfg.nvcc_flags, *extra_flags, *_torch_extension_flags(src))
         cache_key = self._cache_key(src=src, target_arch=target_arch, flags=flags)
         entry_dir = self.cache_root / cache_key
         so_path = entry_dir / "kernel.so"
@@ -164,6 +165,27 @@ class LocalGPURunner(GPURunner):
         hasher.update(b"\0")
         hasher.update(src.encode())
         return hasher.hexdigest()
+
+
+def _torch_extension_flags(src: str = "") -> tuple[str, ...]:
+    if "torch/extension.h" not in src and "TORCH_LIBRARY" not in src:
+        return ()
+    try:
+        import torch
+        from torch.utils.cpp_extension import include_paths, library_paths
+    except ImportError:
+        return ()
+
+    flags: list[str] = ["-std=c++17", "-DTORCH_API_INCLUDE_EXTENSION_H"]
+    flags.extend(f"-I{path}" for path in include_paths(device_type="cuda"))
+    python_include = sysconfig.get_paths().get("include")
+    if python_include:
+        flags.append(f"-I{python_include}")
+    flags.extend(f"-L{path}" for path in library_paths(device_type="cuda"))
+    flags.extend(("-lc10", "-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10_cuda"))
+    abi = int(cast(Any, torch)._C._GLIBCXX_USE_CXX11_ABI)
+    flags.append(f"-D_GLIBCXX_USE_CXX11_ABI={abi}")
+    return tuple(flags)
 
 
 def _extract_error_lines(log: str) -> list[str]:
