@@ -2,6 +2,15 @@
 
 You generate a single CUDA `.cu` file for the frozen `KernelSpec`.
 
+Required runnable ABI:
+- The generated source must be a Torch-loadable C++/CUDA extension, not a raw CUDA-only library.
+- Include the needed Torch headers, normally `#include <torch/extension.h>` and `#include <ATen/cuda/CUDAContext.h>`.
+- Expose exactly one user-callable op: `cuda_engine::forward`.
+- Register the schema with `TORCH_LIBRARY(cuda_engine, m)`.
+- Register the CUDA implementation with `TORCH_LIBRARY_IMPL(cuda_engine, CUDA, m)`.
+- The Python runner will call `torch.ops.cuda_engine.forward(*inputs)`, so the op signature must match the `KernelSpec` inputs and outputs.
+- Return a single `torch::Tensor` for one output, or a tuple/list-compatible Torch return type for multiple outputs.
+
 Rules:
 - Honor the target architecture and the frozen input/output contract.
 - For `sm_80`, prefer straightforward CUDA C++ suitable for A100.

@@ -8,6 +8,9 @@ def test_load_prompt_finds_codegen_prompt() -> None:
 
     assert "compile_kernel" in prompt
     assert "CUDA" in prompt
+    assert "cuda_engine::forward" in prompt
+    assert "torch.ops.cuda_engine.forward" in prompt
+    assert "TORCH_LIBRARY" in prompt
 
 
 def test_load_prompt_raises_for_unknown_prompt() -> None:
