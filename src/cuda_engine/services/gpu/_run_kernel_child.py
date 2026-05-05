@@ -37,11 +37,12 @@ def _run_forward(so_path: Path, inputs: list[Any]) -> Any:
 
 def _try_python_extension_forward(so_path: Path, inputs: list[Any]) -> Any:
     spec = importlib.util.spec_from_file_location("cuda_engine_generated_kernel", so_path)
-    if spec is None or spec.loader is None:
+    loader = getattr(spec, "loader", None)
+    if spec is None or loader is None:
         return _NOT_FOUND
-    module = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(module)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
     except ImportError:
         return _NOT_FOUND
     forward = getattr(module, "forward", None)
