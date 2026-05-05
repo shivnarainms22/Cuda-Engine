@@ -22,17 +22,18 @@ class AnthropicClient(LLMClient):
         tools: list[ToolSpec] | None = None,
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
     ) -> LLMResponse:
         started_at = time.time()
         create = cast(Callable[..., Any], self.client.messages.create)
         request: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system,
             "messages": messages,
         }
+        if temperature is not None:
+            request["temperature"] = temperature
         if tools is not None:
             request["tools"] = [tool.model_dump(mode="json") for tool in tools]
         response = create(**request)

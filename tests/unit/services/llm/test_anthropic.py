@@ -84,3 +84,24 @@ def test_anthropic_client_omits_tools_when_none(monkeypatch) -> None:
 
     fake = fake_holder["client"]
     assert "tools" not in fake.messages.kwargs
+
+
+def test_anthropic_client_omits_temperature_by_default(monkeypatch) -> None:
+    fake_holder = {}
+
+    def fake_factory(api_key: str | None = None):
+        fake = _FakeAnthropic(api_key=api_key)
+        fake_holder["client"] = fake
+        return fake
+
+    monkeypatch.setattr("anthropic.Anthropic", fake_factory)
+    client = AnthropicClient(cfg=SynthesisConfig())
+
+    client.complete(
+        system=[{"type": "text", "text": "sys"}],
+        messages=[{"role": "user", "content": "hello"}],
+        model="claude-opus-4-7",
+    )
+
+    fake = fake_holder["client"]
+    assert "temperature" not in fake.messages.kwargs

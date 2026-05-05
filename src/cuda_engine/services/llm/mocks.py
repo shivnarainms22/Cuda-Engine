@@ -17,7 +17,7 @@ class MockLLMClient(LLMClient):
         tools: list[ToolSpec] | None = None,
         model: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
+        temperature: float | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
