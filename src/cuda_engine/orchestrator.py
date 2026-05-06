@@ -97,7 +97,7 @@ class Orchestrator:
             stage_traces,
             llm,
             "performance",
-            lambda: Stage4Performance(llm=llm, gpu=self.gpu, store=self.store).run(
+            lambda: Stage4Performance(llm=llm, gpu=self.gpu, store=self.store, cfg=self.cfg).run(
                 spec=spec,
                 artifact=artifact,
                 run_id=run_id,

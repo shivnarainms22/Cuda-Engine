@@ -22,6 +22,7 @@ class MockGPURunner(GPURunner):
         self._run = list(run_results or [])
         self._benchmark = list(benchmark_results or [])
         self._profile = list(profile_results or [])
+        self.benchmark_calls: list[dict[str, Any]] = []
 
     def compile(
         self,
@@ -53,6 +54,15 @@ class MockGPURunner(GPURunner):
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
     ) -> BenchmarkResult:
+        self.benchmark_calls.append(
+            {
+                "so_path": so_path,
+                "input_shapes": [tuple(getattr(input_value, "shape", ())) for input_value in inputs],
+                "warmup_iterations": warmup_iterations,
+                "timed_iterations": timed_iterations,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         if not self._benchmark:
             return BenchmarkResult(
                 ok=True,

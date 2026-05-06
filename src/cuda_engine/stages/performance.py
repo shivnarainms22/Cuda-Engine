@@ -1,4 +1,9 @@
+from typing import Any
+
+from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import KernelArtifact, KernelSpec, PerformanceReport
+from cuda_engine.services.gpu.base import BenchmarkResult, GPURunner
+from cuda_engine.services.llm.base import LLMClient
 from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.base import Stage
 from cuda_engine.stages.correctness import _make_inputs
@@ -6,6 +11,16 @@ from cuda_engine.stages.correctness import _make_inputs
 
 class Stage4Performance(Stage):
     name = "performance"
+
+    def __init__(
+        self,
+        llm: LLMClient | None = None,
+        gpu: GPURunner | None = None,
+        store: ArtifactStore | None = None,
+        cfg: SynthesisConfig | None = None,
+    ) -> None:
+        super().__init__(llm=llm, gpu=gpu, store=store)
+        self.cfg = cfg or SynthesisConfig()
 
     def run(
         self,
@@ -27,14 +42,18 @@ class Stage4Performance(Stage):
             _write_report(self.store, run_id, report)
             return report
 
-        inputs = _make_inputs(spec, shape=(4096,))
+        inputs = _make_inputs(spec, shape=(self.cfg.performance_shape_n,))
         benchmark = self.gpu.benchmark_kernel(
             artifact.kernel_so_path,
             inputs,
-            warmup_iterations=10,
-            timed_iterations=50,
+            warmup_iterations=self.cfg.benchmark_warmup_iterations,
+            timed_iterations=self.cfg.benchmark_timed_iterations,
         )
-        self.store.write_json(run_id, "stage4_performance/benchmark.json", benchmark.model_dump(mode="json"))
+        self.store.write_json(
+            run_id,
+            "stage4_performance/benchmark.json",
+            _benchmark_payload(benchmark, cfg=self.cfg),
+        )
 
         if not benchmark.ok:
             report = PerformanceReport(
@@ -65,3 +84,13 @@ def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float:
 
 def _write_report(store: ArtifactStore, run_id: str, report: PerformanceReport) -> None:
     store.write_json(run_id, "stage4_performance/report.json", report.model_dump(mode="json"))
+
+
+def _benchmark_payload(benchmark: BenchmarkResult, *, cfg: SynthesisConfig) -> dict[str, Any]:
+    payload = benchmark.model_dump(mode="json")
+    payload["settings"] = {
+        "performance_shape_n": cfg.performance_shape_n,
+        "benchmark_warmup_iterations": cfg.benchmark_warmup_iterations,
+        "benchmark_timed_iterations": cfg.benchmark_timed_iterations,
+    }
+    return payload

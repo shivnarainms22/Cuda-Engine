@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import (
     KernelArtifact,
     KernelSpec,
@@ -22,8 +23,8 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
                 custom_ms=0.25,
                 baseline_ms=1.0,
                 achieved_gbps=512.0,
-                warmup_iterations=5,
-                timed_iterations=20,
+                warmup_iterations=10,
+                timed_iterations=100,
             )
         ]
     )
@@ -40,6 +41,51 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
     assert report.achieved_gbps == 512.0
     assert report.below_target is False
     assert b'"speedup_vs_reference": 4.0' in store._files[("run123", "stage4_performance/report.json")]
+    assert b'"warmup_iterations": 10' in store._files[("run123", "stage4_performance/benchmark.json")]
+    assert b'"timed_iterations": 100' in store._files[("run123", "stage4_performance/benchmark.json")]
+    assert b'"performance_shape_n": 1048576' in store._files[
+        ("run123", "stage4_performance/benchmark.json")
+    ]
+
+
+def test_stage4_performance_uses_configured_benchmark_settings() -> None:
+    store = InMemoryStore()
+    gpu = MockGPURunner(
+        benchmark_results=[
+            BenchmarkResult(
+                ok=True,
+                custom_ms=1.0,
+                baseline_ms=1.0,
+                warmup_iterations=2,
+                timed_iterations=3,
+            )
+        ]
+    )
+    stage = Stage4Performance(
+        gpu=gpu,
+        store=store,
+        cfg=SynthesisConfig(
+            performance_shape_n=256,
+            benchmark_warmup_iterations=2,
+            benchmark_timed_iterations=3,
+        ),
+    )
+
+    stage.run(
+        spec=_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        run_id="run123",
+    )
+
+    assert gpu.benchmark_calls == [
+        {
+            "so_path": Path("kernel.so"),
+            "input_shapes": [(256,), (256,)],
+            "warmup_iterations": 2,
+            "timed_iterations": 3,
+            "timeout_seconds": 60,
+        }
+    ]
 
 
 def test_stage4_performance_reports_missing_shared_object() -> None:

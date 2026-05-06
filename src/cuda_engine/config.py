@@ -21,6 +21,9 @@ class SynthesisConfig(BaseModel):
     correctness_atol: float = 1e-3
     nvcc_flags: tuple[str, ...] = ("-O3", "--use_fast_math")
     artifact_root: str | None = None
+    performance_shape_n: int = 1_048_576
+    benchmark_warmup_iterations: int = 10
+    benchmark_timed_iterations: int = 100
     sonnet_model: str = "claude-sonnet-4-6"
     opus_model: str = "claude-opus-4-7"
     request_timeout_seconds: int = 120

@@ -37,7 +37,11 @@ def test_orchestrator_happy_path_with_mocks() -> None:
             run_results=[RunResult(ok=True, output_tensors=[torch.arange(128.0)])],
         ),
         store=store,
-        cfg=SynthesisConfig(),
+        cfg=SynthesisConfig(
+            performance_shape_n=256,
+            benchmark_warmup_iterations=2,
+            benchmark_timed_iterations=3,
+        ),
     )
 
     result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
@@ -68,6 +72,9 @@ def test_orchestrator_happy_path_with_mocks() -> None:
     ]
     assert persisted["correctness"]["passed"] is True
     assert persisted["performance"]["below_target"] is False
+    assert orchestrator.gpu.benchmark_calls[0]["input_shapes"] == [(256,)]
+    assert orchestrator.gpu.benchmark_calls[0]["warmup_iterations"] == 2
+    assert orchestrator.gpu.benchmark_calls[0]["timed_iterations"] == 3
 
 
 def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
