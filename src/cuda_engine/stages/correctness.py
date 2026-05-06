@@ -4,6 +4,8 @@ from typing import Any
 from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec
 from cuda_engine.stages.base import Stage
 
+CORRECTNESS_SHAPES: tuple[tuple[int, ...], ...] = ((0,), (1,), (127,), (128,), (1024,), (4097,))
+
 
 class Stage3Correctness(Stage):
     name = "correctness"
@@ -25,63 +27,39 @@ class Stage3Correctness(Stage):
                 max_abs_err=float("inf"),
                 max_rel_err=float("inf"),
                 shapes_tested=[],
+                shape_results=[],
                 failing_inputs=[{"error": "kernel_so_path is required for correctness"}],
             )
 
-        inputs = _make_inputs(spec, shape=(128,))
-        expected = _as_output_list(reference(*inputs))
-        run_result = self.gpu.run_kernel(artifact.kernel_so_path, inputs)
-        if not run_result.ok or run_result.output_tensors is None:
-            report = CorrectnessReport(
-                passed=False,
-                max_abs_err=float("inf"),
-                max_rel_err=float("inf"),
-                shapes_tested=[(128,)],
-                failing_inputs=[{"shape": (128,), "error": run_result.stderr or "kernel run failed"}],
-            )
-            self.store.write_json(run_id, "stage3_correctness/report.json", report)
-            return report
-
         max_abs_err = 0.0
         max_rel_err = 0.0
+        shape_results: list[dict[str, Any]] = []
         failing_inputs: list[dict[str, Any]] = []
-        for output_index, (actual, exp) in enumerate(zip(run_result.output_tensors, expected, strict=False)):
-            abs_err, rel_err = _error_stats(actual, exp)
-            max_abs_err = max(max_abs_err, abs_err)
-            max_rel_err = max(max_rel_err, rel_err)
-            if not _within_tolerance(
-                actual,
-                exp,
+        for shape in CORRECTNESS_SHAPES:
+            inputs = _make_inputs(spec, shape=shape)
+            expected = _as_output_list(reference(*inputs))
+            run_result = self.gpu.run_kernel(artifact.kernel_so_path, inputs)
+            shape_result, failures = _evaluate_shape(
+                shape=shape,
+                expected=expected,
+                run_result=run_result,
                 rtol=spec.precision_tolerance.rtol,
                 atol=spec.precision_tolerance.atol,
-            ):
-                failing_inputs.append(
-                    {
-                        "shape": (128,),
-                        "output_index": output_index,
-                        "max_abs_err": abs_err,
-                        "max_rel_err": rel_err,
-                    }
-                )
-
-        if len(run_result.output_tensors) != len(expected):
-            failing_inputs.append(
-                {
-                    "shape": (128,),
-                    "error": (
-                        f"expected {len(expected)} outputs, got {len(run_result.output_tensors)}"
-                    ),
-                }
             )
+            shape_results.append(shape_result)
+            failing_inputs.extend(failures)
+            max_abs_err = max(max_abs_err, float(shape_result["max_abs_err"]))
+            max_rel_err = max(max_rel_err, float(shape_result["max_rel_err"]))
 
         report = CorrectnessReport(
             passed=not failing_inputs,
             max_abs_err=max_abs_err,
             max_rel_err=max_rel_err,
-            shapes_tested=[(128,)],
+            shapes_tested=list(CORRECTNESS_SHAPES),
+            shape_results=shape_results,
             failing_inputs=failing_inputs,
         )
-        self.store.write_json(run_id, "stage3_correctness/report.json", report)
+        self.store.write_json(run_id, "stage3_correctness/report.json", report.model_dump(mode="json"))
         return report
 
 
@@ -143,6 +121,63 @@ def _as_output_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _evaluate_shape(
+    *,
+    shape: tuple[int, ...],
+    expected: list[Any],
+    run_result: Any,
+    rtol: float,
+    atol: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not run_result.ok or run_result.output_tensors is None:
+        failure = {"shape": shape, "error": run_result.stderr or "kernel run failed"}
+        return (
+            {
+                "shape": shape,
+                "passed": False,
+                "max_abs_err": float("inf"),
+                "max_rel_err": float("inf"),
+                "error": failure["error"],
+            },
+            [failure],
+        )
+
+    max_abs_err = 0.0
+    max_rel_err = 0.0
+    failures: list[dict[str, Any]] = []
+    for output_index, (actual, exp) in enumerate(zip(run_result.output_tensors, expected, strict=False)):
+        abs_err, rel_err = _error_stats(actual, exp)
+        max_abs_err = max(max_abs_err, abs_err)
+        max_rel_err = max(max_rel_err, rel_err)
+        if not _within_tolerance(actual, exp, rtol=rtol, atol=atol):
+            failures.append(
+                {
+                    "shape": shape,
+                    "output_index": output_index,
+                    "max_abs_err": abs_err,
+                    "max_rel_err": rel_err,
+                }
+            )
+
+    if len(run_result.output_tensors) != len(expected):
+        failures.append(
+            {
+                "shape": shape,
+                "error": f"expected {len(expected)} outputs, got {len(run_result.output_tensors)}",
+            }
+        )
+
+    return (
+        {
+            "shape": shape,
+            "passed": not failures,
+            "max_abs_err": max_abs_err,
+            "max_rel_err": max_rel_err,
+        },
+        failures,
+    )
 
 
 def _error_stats(actual: Any, expected: Any) -> tuple[float, float]:

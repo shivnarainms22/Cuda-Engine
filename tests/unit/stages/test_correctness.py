@@ -28,7 +28,12 @@ def _identity_spec() -> KernelSpec:
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
-        gpu=MockGPURunner(run_results=[RunResult(ok=True, output_tensors=[torch.arange(128.0)])]),
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in (0, 1, 127, 128, 1024, 4097)
+            ]
+        ),
         store=InMemoryStore(),
     )
 
@@ -41,13 +46,31 @@ def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
 
     assert report.passed is True
     assert report.max_abs_err == 0.0
-    assert report.shapes_tested == [(128,)]
+    assert report.shapes_tested == [(0,), (1,), (127,), (128,), (1024,), (4097,)]
+    assert [shape["shape"] for shape in report.shape_results] == [
+        (0,),
+        (1,),
+        (127,),
+        (128,),
+        (1024,),
+        (4097,),
+    ]
+    assert all(shape["passed"] for shape in report.shape_results)
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
     torch = __import__("torch")
+    run_results = [
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (0, 1, 127)
+    ]
+    run_results.append(RunResult(ok=True, output_tensors=[torch.zeros(128)]))
+    run_results.extend(
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (1024, 4097)
+    )
     stage = Stage3Correctness(
-        gpu=MockGPURunner(run_results=[RunResult(ok=True, output_tensors=[torch.zeros(128)])]),
+        gpu=MockGPURunner(run_results=run_results),
         store=InMemoryStore(),
     )
 
@@ -61,11 +84,19 @@ def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
     assert report.passed is False
     assert report.max_abs_err > 0
     assert report.failing_inputs[0]["shape"] == (128,)
+    assert report.shape_results[3]["shape"] == (128,)
+    assert report.shape_results[3]["passed"] is False
 
 
 def test_stage3_correctness_fails_when_kernel_run_fails() -> None:
     stage = Stage3Correctness(
-        gpu=MockGPURunner(run_results=[RunResult(ok=False, stderr="launch failed")]),
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[__import__("torch").arange(0.0)]),
+                RunResult(ok=True, output_tensors=[__import__("torch").arange(1.0)]),
+                RunResult(ok=False, stderr="launch failed"),
+            ]
+        ),
         store=InMemoryStore(),
     )
 
@@ -78,6 +109,8 @@ def test_stage3_correctness_fails_when_kernel_run_fails() -> None:
 
     assert report.passed is False
     assert report.failing_inputs[0]["error"] == "launch failed"
+    assert report.failing_inputs[0]["shape"] == (127,)
+    assert report.shape_results[2]["passed"] is False
 
 
 def test_stage3_input_generation_uses_cuda_when_available(monkeypatch) -> None:

@@ -8,6 +8,7 @@ class CorrectnessReport(BaseModel):
     max_abs_err: float
     max_rel_err: float
     shapes_tested: list[tuple[int, ...]]
+    shape_results: list[dict[str, Any]] = Field(default_factory=list)
     failing_inputs: list[dict[str, Any]] = Field(default_factory=list)
 
 

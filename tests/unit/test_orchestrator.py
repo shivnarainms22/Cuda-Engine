@@ -11,6 +11,8 @@ from cuda_engine.services.store.mocks import InMemoryStore
 
 SPEC_JSON = """{"name":"identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["N"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["N"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
 
+SHAPE_SIZES = (0, 1, 127, 128, 1024, 4097)
+
 
 def test_orchestrator_happy_path_with_mocks() -> None:
     torch = __import__("torch")
@@ -34,7 +36,10 @@ def test_orchestrator_happy_path_with_mocks() -> None:
         ),
         gpu=MockGPURunner(
             compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
-            run_results=[RunResult(ok=True, output_tensors=[torch.arange(128.0)])],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in SHAPE_SIZES
+            ],
         ),
         store=store,
         cfg=SynthesisConfig(
@@ -80,6 +85,15 @@ def test_orchestrator_happy_path_with_mocks() -> None:
 def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
     torch = __import__("torch")
     store = InMemoryStore()
+    run_results = [
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (0, 1, 127)
+    ]
+    run_results.append(RunResult(ok=True, output_tensors=[torch.zeros(128)]))
+    run_results.extend(
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (1024, 4097)
+    )
     orchestrator = Orchestrator(
         llm=MockLLMClient(
             responses=[
@@ -99,7 +113,7 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
         ),
         gpu=MockGPURunner(
             compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
-            run_results=[RunResult(ok=True, output_tensors=[torch.zeros(128)])],
+            run_results=run_results,
         ),
         store=store,
         cfg=SynthesisConfig(),

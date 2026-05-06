@@ -9,6 +9,8 @@ from cuda_engine.services.store.mocks import InMemoryStore
 
 SPEC_JSON = """{"name":"identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["N"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["N"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
 
+SHAPE_SIZES = (0, 1, 127, 128, 1024, 4097)
+
 
 def test_synthesize_returns_result_with_mocks() -> None:
     torch = __import__("torch")
@@ -35,7 +37,10 @@ def test_synthesize_returns_result_with_mocks() -> None:
         ),
         _gpu=MockGPURunner(
             compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
-            run_results=[RunResult(ok=True, output_tensors=[torch.arange(128.0)])],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in SHAPE_SIZES
+            ],
         ),
         _store=InMemoryStore(),
     )
