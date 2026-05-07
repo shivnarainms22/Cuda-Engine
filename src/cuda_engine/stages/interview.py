@@ -48,7 +48,7 @@ class Stage1Interview(Stage):
             system=system,
             messages=[user_message],
             tools=None,
-            model="claude-opus-4-7",
+            model="claude-sonnet-4-6",
         )
         self.store.write_text(run_id, "stage1_interview/llm_response.md", response.text)
         spec = _parse_kernel_spec(response.text)

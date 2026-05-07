@@ -38,7 +38,7 @@ def test_stage1_interview_parses_kernel_spec_from_fenced_json() -> None:
     assert spec.name == "vector_add"
     assert spec.inputs[0].name == "x"
     assert spec.optimization_priority == "throughput"
-    assert llm.calls[0]["model"] == "claude-opus-4-7"
+    assert llm.calls[0]["model"] == "claude-sonnet-4-6"
     assert ("run123", "stage1_interview/kernel_spec.json") in store._files
 
 
