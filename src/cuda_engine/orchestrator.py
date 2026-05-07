@@ -6,7 +6,13 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from cuda_engine.config import SynthesisConfig
-from cuda_engine.models import StageTrace, SynthesisReport, SynthesisResult
+from cuda_engine.models import (
+    CorrectnessReport,
+    KernelArtifact,
+    StageTrace,
+    SynthesisReport,
+    SynthesisResult,
+)
 from cuda_engine.services.gpu.base import GPURunner
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.store.base import ArtifactStore
@@ -76,6 +82,51 @@ class Orchestrator:
             ),
             succeeded=lambda report: report.passed,
         )
+        for repair_attempt in range(1, self.cfg.retry_budgets.correctness + 1):
+            if correctness.passed:
+                break
+            repair_dir = f"stage3_repair/attempt_{repair_attempt:02d}"
+            self.store.write_json(
+                run_id,
+                f"{repair_dir}/correctness_report.json",
+                correctness.model_dump(mode="json"),
+            )
+
+            def repair_action(
+                correctness_report: CorrectnessReport = correctness,
+                repair_prefix: str = repair_dir,
+            ) -> KernelArtifact:
+                return Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
+                    spec=spec,
+                    run_id=run_id,
+                    retry_budget=self.cfg.retry_budgets.codegen,
+                    repair_context=correctness_report,
+                    artifact_prefix=f"{repair_prefix}/codegen",
+                )
+
+            artifact = _run_traced_stage(
+                stage_traces,
+                llm,
+                "codegen_repair",
+                repair_action,
+            )
+
+            def correctness_action(candidate: KernelArtifact = artifact) -> CorrectnessReport:
+                return Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
+                    spec=spec,
+                    artifact=candidate,
+                    reference=reference,
+                    run_id=run_id,
+                    retry_budget=self.cfg.retry_budgets.correctness,
+                )
+
+            correctness = _run_traced_stage(
+                stage_traces,
+                llm,
+                "correctness",
+                correctness_action,
+                succeeded=lambda report: report.passed,
+            )
         if not correctness.passed:
             result = SynthesisResult.failed(
                 stage=3,

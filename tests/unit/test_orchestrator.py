@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from cuda_engine.config import SynthesisConfig
+from cuda_engine.config import RetryBudgets, SynthesisConfig
 from cuda_engine.orchestrator import Orchestrator
 from cuda_engine.services.gpu.base import CompileResult, RunResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
@@ -116,7 +116,7 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
             run_results=run_results,
         ),
         store=store,
-        cfg=SynthesisConfig(),
+        cfg=SynthesisConfig(retry_budgets=RetryBudgets(correctness=0)),
     )
 
     result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
@@ -138,3 +138,75 @@ def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:
     assert persisted["report"]["stage_traces"][-1]["succeeded"] is False
     assert persisted["correctness"]["passed"] is False
     assert persisted["performance"] is None
+
+
+def test_orchestrator_repairs_after_correctness_failure() -> None:
+    torch = __import__("torch")
+    store = InMemoryStore()
+    llm = MockLLMClient(
+        responses=[
+            SPEC_JSON,
+            LLMResponse(
+                text="```cuda\nbad code\n```",
+                model="mock",
+                tool_calls=[
+                    {
+                        "name": "compile_kernel",
+                        "input": {"src": "bad code", "target_arch": "sm_80"},
+                    }
+                ],
+            ),
+            LLMResponse(
+                text="```cuda\nfixed code\n```",
+                model="mock",
+                tool_calls=[
+                    {
+                        "name": "compile_kernel",
+                        "input": {"src": "fixed code", "target_arch": "sm_80"},
+                    }
+                ],
+            ),
+            "```cuda\n// annotated\nfixed code\n```",
+        ]
+    )
+    first_correctness = [
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (0, 1, 127)
+    ]
+    first_correctness.append(RunResult(ok=True, output_tensors=[torch.zeros(128)]))
+    first_correctness.extend(
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in (1024, 4097)
+    )
+    repaired_correctness = [
+        RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+        for size in SHAPE_SIZES
+    ]
+    orchestrator = Orchestrator(
+        llm=llm,
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=True, so_path=Path("bad.so"), log="ok"),
+                CompileResult(ok=True, so_path=Path("fixed.so"), log="ok"),
+            ],
+            run_results=[*first_correctness, *repaired_correctness],
+        ),
+        store=store,
+        cfg=SynthesisConfig(),
+    )
+
+    result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+    assert result.passed is True
+    assert result.correctness is not None
+    assert result.correctness.passed is True
+    assert llm.call_count == 4
+    assert b'"passed": false' in store._files[
+        (result.run_id, "stage3_repair/attempt_01/correctness_report.json")
+    ]
+    repair_prompt = llm.calls[2]["messages"][0]["content"]
+    assert "Repair kernel.cu" in repair_prompt
+    assert "failing_inputs" in repair_prompt
+    assert store._files[
+        (result.run_id, "stage3_repair/attempt_01/codegen/attempt_01/kernel.cu")
+    ] == b"fixed code"

@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from cuda_engine.models import KernelSpec, OptimizationPriority, PrecisionTolerance, TensorArg
+from cuda_engine.models import (
+    CorrectnessReport,
+    KernelSpec,
+    OptimizationPriority,
+    PrecisionTolerance,
+    TensorArg,
+)
 from cuda_engine.services.gpu.base import CompileResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.llm.base import LLMResponse
@@ -69,6 +75,39 @@ def test_stage2_codegen_retries_after_compile_error() -> None:
     assert store._files[("run123", "stage2_codegen/attempt_01/compile_log.txt")] == b"bad"
     assert "Compilation failed" in llm.calls[1]["messages"][-1]["content"]
     assert "Compile log:\nbad" in llm.calls[1]["messages"][-1]["content"]
+
+
+def test_stage2_codegen_accepts_correctness_repair_context_and_custom_prefix() -> None:
+    store = InMemoryStore()
+    llm = MockLLMClient([_compile_call("fixed")])
+    stage = Stage2Codegen(
+        llm=llm,
+        gpu=MockGPURunner(
+            compile_results=[CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok")]
+        ),
+        store=store,
+    )
+    correctness = CorrectnessReport(
+        passed=False,
+        max_abs_err=1.0,
+        max_rel_err=1.0,
+        shapes_tested=[(128,)],
+        failing_inputs=[{"shape": (128,), "max_abs_err": 1.0}],
+    )
+
+    artifact = stage.run(
+        spec=_spec(),
+        run_id="run123",
+        retry_budget=1,
+        repair_context=correctness,
+        artifact_prefix="stage3_repair/attempt_01/codegen",
+    )
+
+    prompt = llm.calls[0]["messages"][0]["content"]
+    assert "Repair kernel.cu" in prompt
+    assert "failing_inputs" in prompt
+    assert artifact.kernel_cu_path.as_posix().endswith("stage3_repair/attempt_01/codegen/final/kernel.cu")
+    assert store._files[("run123", "stage3_repair/attempt_01/codegen/attempt_01/kernel.cu")] == b"fixed"
 
 
 def test_stage2_codegen_raises_when_retry_budget_exhausted() -> None:
