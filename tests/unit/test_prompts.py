@@ -13,6 +13,8 @@ def test_load_prompt_finds_codegen_prompt() -> None:
     assert "TORCH_LIBRARY" in prompt
     assert "argmax" in prompt
     assert "int64" in prompt
+    assert "RMSNorm" in prompt
+    assert "fp32 accumulation" in prompt
 
 
 def test_load_prompt_finds_polish_prompt() -> None:

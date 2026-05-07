@@ -73,7 +73,7 @@ def _make_inputs(spec: KernelSpec, *, shape: tuple[int, ...]) -> list[Any]:
         tensor_shape = _concrete_shape(arg.shape, fallback=shape)
         if arg.dtype in {"fp32", "fp16", "bf16", "fp64"}:
             dtype = getattr(torch, _torch_dtype_name(arg.dtype))
-            value = torch.arange(_numel(tensor_shape), dtype=torch.float32).reshape(tensor_shape)
+            value = _floating_input_values(torch, tensor_shape=tensor_shape, dtype=arg.dtype)
             inputs.append(value.to(dtype=dtype, device=device) + index)
         elif arg.dtype in {"int32", "int64", "uint8", "int8"}:
             dtype = getattr(torch, _torch_dtype_name(arg.dtype))
@@ -83,6 +83,13 @@ def _make_inputs(spec: KernelSpec, *, shape: tuple[int, ...]) -> list[Any]:
         else:
             raise ValueError(f"Unsupported dtype for correctness input generation: {arg.dtype}")
     return inputs
+
+
+def _floating_input_values(torch: Any, *, tensor_shape: tuple[int, ...], dtype: str) -> Any:
+    values = torch.arange(_numel(tensor_shape), dtype=torch.float32).reshape(tensor_shape)
+    if dtype in {"fp16", "bf16"}:
+        return (values.remainder(17) - 8) / 8
+    return values
 
 
 def _concrete_shape(symbolic_shape: tuple[str, ...], *, fallback: tuple[int, ...]) -> tuple[int, ...]:

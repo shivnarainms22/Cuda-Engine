@@ -72,6 +72,17 @@ def _argmax_spec() -> KernelSpec:
     )
 
 
+def _rms_norm_spec() -> KernelSpec:
+    return KernelSpec(
+        name="rms_norm",
+        target_arch="sm_80",
+        inputs=[TensorArg(name="x", dtype="fp16", shape=("B", "D"))],
+        outputs=[TensorArg(name="out", dtype="fp16", shape=("B", "D"))],
+        precision_tolerance=PrecisionTolerance(rtol=1e-2, atol=1e-2),
+        optimization_priority=OptimizationPriority.THROUGHPUT,
+    )
+
+
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
@@ -201,6 +212,14 @@ def test_stage3_correctness_supports_integer_reduction_outputs() -> None:
     assert report.passed is True
     assert report.max_abs_err == 0.0
     assert report.shapes_tested == [(2, 3), (3, 5)]
+
+
+def test_make_inputs_bounds_fp16_values_for_stable_reference_math() -> None:
+    x = correctness._make_inputs(_rms_norm_spec(), shape=(4, 256))[0]
+
+    assert tuple(x.shape) == (4, 256)
+    assert str(x.dtype).endswith("float16")
+    assert float(x.abs().max().item()) <= 2.0
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:

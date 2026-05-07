@@ -8,3 +8,5 @@ def test_load_prompt_finds_interview_prompt() -> None:
     assert "JSON" in prompt
     assert "argmax" in prompt
     assert "int64" in prompt
+    assert "RMSNorm" in prompt
+    assert "fp16" in prompt

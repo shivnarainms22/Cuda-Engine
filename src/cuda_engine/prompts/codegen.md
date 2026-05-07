@@ -17,6 +17,8 @@ Rules:
 - For reduction outputs, return tensors with the exact reduced shape in the KernelSpec.
   Example: input `["B", "D"]` and output `["B"]` means one output element per row.
 - For argmax kernels, return `int64` indices when the KernelSpec output dtype is `int64`.
+- For RMSNorm fp16 kernels, use fp32 accumulation for the mean square and reciprocal square root,
+  do not add gamma unless the KernelSpec includes it, and cast the final output to fp16.
 - For `sm_80`, prefer straightforward CUDA C++ suitable for A100.
 - Make memory hierarchy choices explicit in comments when they affect performance.
 - Use 256 threads per block as the default elementwise baseline unless the spec suggests otherwise.
