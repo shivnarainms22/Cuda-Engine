@@ -144,12 +144,19 @@ Annotations explain: target SM, tolerance vs measured error, throughput, correct
 
 ---
 
-## Follow-ups (deferred to M3 prep — non-blocking for M2 sign-off)
+## Follow-ups
 
-1. **Stage 1 ran on Opus instead of Sonnet.** `claude-opus-4-7` was used for the interview stage in the row_sum_reduce trace, while codegen + polish used Sonnet. The locked decision is Sonnet default + Opus on escalation. Either Stage 1 hardcodes Opus or escalation always fires. Investigate `src/cuda_engine/stages/interview.py` and the orchestrator's escalation hook before M3 begins.
-2. **Duplicate happy-path run dirs.** 7 happy-path runs for 5 happy-path tests (two `argmax_*` variants, two `rms_norm_*` variants). M3's `evals/runner.py` assumes one run per `synthesize()` call. Determine whether retries or test fixtures produce the duplicates.
-3. **Orphan run dir `4a687aa02162`** has no parseable `report.json`. Likely an aborted run from a Stage 1/2 crash before persistence. Add a defensive write of a minimal `report.json` on early failure paths.
-4. **Prompt cache verification.** `cache_read_tokens=0` across all stages on this cold-session run. Verify on a warm session (back-to-back synthesize calls in one process) that `cache_read_tokens > 0` on the second call. If not, the `cache_control` headers on system blocks are not taking effect.
+### Resolved before merge
+
+1. ✅ **Stage 1 ran on Opus instead of Sonnet.** Root cause: `interview.py:51` hardcoded `"claude-opus-4-7"`. Codegen and polish were already on `"claude-sonnet-4-6"`. Fixed in commit `3378085` (`fix(stage1): use Sonnet default per locked decision`). Cfg-driven model selection (`cfg.sonnet_model`/`cfg.opus_model`) and Sonnet→Opus escalation will land with the M3 perf loop.
+
+4. ✅ **Prompt cache observation reframed.** Cache wiring is correct (`cache_control: ephemeral` on system blocks in interview/codegen/polish, `cache_read_tokens` parsed in `AnthropicClient`). However the **system prompts are too short to qualify for caching**: interview ~275 tokens, codegen ~370 tokens, polish ~90 tokens — all well below Anthropic's 1024-token minimum. So `cache_read_tokens=0` is expected on every call regardless of session warmth. Real M3 task: pad system prompts above 1024 tokens (folding in the target_caps block as a stable cacheable suffix is the cleanest approach) or accept the per-call cost.
+
+### Open — need an instrumented Colab rerun
+
+2. **Duplicate happy-path run dirs.** 7 happy-path runs for 5 happy-path tests (two `argmax_*` variants, two `rms_norm_*` variants). Cannot reproduce locally: `Orchestrator.run()` creates exactly one `run_id` per `synthesize()`, integration tests call synthesize once each, and `pytest-rerunfailures` is not in dev deps. Hypothesis: a Stage 1 or Stage 2 LLM call timed out at the network layer and the test's outer pytest wrapper retried — but no test retry plugin is installed. Next-Colab-session probe: `ls .test_artifacts/runs && date` between each integration test to see when each dir is created, plus check whether anthropic SDK retries internally on transient errors. M3's `evals/runner.py` assumes one run per synthesize, so this needs resolution before Chunk 4.5.
+
+3. **Orphan run dir `4a687aa02162`** had no parseable `report.json`. The orchestrator only persists `report.json` via `_write_result_report` at the end of `run()`. If Stage 1/2 raises an unhandled exception, the run dir is created but never gets a report. Defensive fix (M3 prep): wrap `Orchestrator.run` body in a try/finally that always writes a minimal `report.json` capturing the failure, so `evals/runner.py` can attribute every run dir.
 
 ## Out of scope for M2 (acceptable carry-over to M3)
 
