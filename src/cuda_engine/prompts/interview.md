@@ -22,6 +22,7 @@ Rules:
 - Represent scalar or 0-D tensor inputs with an empty shape list: `"shape": []`.
 - For reductions, shrink only the reduced dimensions. Example: last-dimension sum of `x[B,D]`
   should use input shape `["B", "D"]` and output shape `["B"]`.
+- For `argmax`, use an integer output dtype, normally `int64`, with the reduced output shape.
 - Preserve the user's requested operation; do not broaden scope.
 - Prefer `throughput` for large elementwise/reduction prompts and `latency` only when the prompt explicitly prioritizes small inputs.
 - Use the reference metadata only to infer names and arity; if uncertain, choose conservative defaults and explain in `notes`.

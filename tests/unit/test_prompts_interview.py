@@ -6,3 +6,5 @@ def test_load_prompt_finds_interview_prompt() -> None:
 
     assert "KernelSpec" in prompt
     assert "JSON" in prompt
+    assert "argmax" in prompt
+    assert "int64" in prompt

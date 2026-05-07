@@ -61,6 +61,17 @@ def _sum_reduction_spec() -> KernelSpec:
     )
 
 
+def _argmax_spec() -> KernelSpec:
+    return KernelSpec(
+        name="argmax",
+        target_arch="sm_80",
+        inputs=[TensorArg(name="x", dtype="fp32", shape=("B", "D"))],
+        outputs=[TensorArg(name="out", dtype="int64", shape=("B",))],
+        precision_tolerance=PrecisionTolerance(rtol=0.0, atol=0.0),
+        optimization_priority=OptimizationPriority.THROUGHPUT,
+    )
+
+
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
@@ -165,6 +176,31 @@ def test_stage3_correctness_reports_output_shape_mismatch() -> None:
     assert report.passed is False
     assert report.shape_results[0]["passed"] is False
     assert "shape mismatch" in report.failing_inputs[0]["error"]
+
+
+def test_stage3_correctness_supports_integer_reduction_outputs() -> None:
+    torch = __import__("torch")
+    stage = Stage3Correctness(
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.tensor([2, 2], dtype=torch.int64)]),
+                RunResult(ok=True, output_tensors=[torch.tensor([4, 4, 4], dtype=torch.int64)]),
+            ]
+        ),
+        store=InMemoryStore(),
+    )
+
+    report = stage.run(
+        spec=_argmax_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        reference=lambda x: x.argmax(dim=-1),
+        run_id="run123",
+        correctness_shapes=((2, 3), (3, 5)),
+    )
+
+    assert report.passed is True
+    assert report.max_abs_err == 0.0
+    assert report.shapes_tested == [(2, 3), (3, 5)]
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
