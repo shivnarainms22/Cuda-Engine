@@ -156,6 +156,19 @@ def _evaluate_shape(
     max_rel_err = 0.0
     failures: list[dict[str, Any]] = []
     for output_index, (actual, exp) in enumerate(zip(run_result.output_tensors, expected, strict=False)):
+        actual_shape = tuple(getattr(actual, "shape", ()))
+        expected_shape = tuple(getattr(exp, "shape", ()))
+        if actual_shape != expected_shape:
+            failures.append(
+                {
+                    "shape": shape,
+                    "output_index": output_index,
+                    "error": f"shape mismatch: expected {expected_shape}, got {actual_shape}",
+                }
+            )
+            max_abs_err = float("inf")
+            max_rel_err = float("inf")
+            continue
         abs_err, rel_err = _error_stats(actual, exp)
         max_abs_err = max(max_abs_err, abs_err)
         max_rel_err = max(max_rel_err, rel_err)

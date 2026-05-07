@@ -50,6 +50,17 @@ def _scalar_multiply_spec() -> KernelSpec:
     )
 
 
+def _sum_reduction_spec() -> KernelSpec:
+    return KernelSpec(
+        name="sum_reduction",
+        target_arch="sm_80",
+        inputs=[TensorArg(name="x", dtype="fp32", shape=("B", "D"))],
+        outputs=[TensorArg(name="out", dtype="fp32", shape=("B",))],
+        precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
+        optimization_priority=OptimizationPriority.THROUGHPUT,
+    )
+
+
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
@@ -130,6 +141,30 @@ def test_stage3_correctness_supports_scalar_tensor_inputs() -> None:
 
     assert report.passed is True
     assert report.shapes_tested == [(3,), (5,)]
+
+
+def test_stage3_correctness_reports_output_shape_mismatch() -> None:
+    torch = __import__("torch")
+    stage = Stage3Correctness(
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(6, dtype=torch.float32).reshape(2, 3)])
+            ]
+        ),
+        store=InMemoryStore(),
+    )
+
+    report = stage.run(
+        spec=_sum_reduction_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        reference=lambda x: x.sum(dim=-1),
+        run_id="run123",
+        correctness_shapes=((2, 3),),
+    )
+
+    assert report.passed is False
+    assert report.shape_results[0]["passed"] is False
+    assert "shape mismatch" in report.failing_inputs[0]["error"]
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
