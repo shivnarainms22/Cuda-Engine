@@ -4,7 +4,7 @@ from typing import Any
 from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec, PerformanceReport
 from cuda_engine.prompts import load_prompt
 from cuda_engine.stages.base import Stage
-from cuda_engine.stages.correctness import Stage3Correctness
+from cuda_engine.stages.correctness import CORRECTNESS_SHAPES, Stage3Correctness
 
 
 class Stage5Polish(Stage):
@@ -19,6 +19,7 @@ class Stage5Polish(Stage):
         performance: PerformanceReport,
         reference: Callable[..., Any],
         run_id: str,
+        correctness_shapes: tuple[tuple[int, ...], ...] = CORRECTNESS_SHAPES,
     ) -> KernelArtifact:
         if self.llm is None or self.gpu is None or self.store is None:
             raise RuntimeError("Stage5Polish requires llm, gpu, and store services")
@@ -78,6 +79,7 @@ class Stage5Polish(Stage):
             reference=reference,
             run_id=run_id,
             artifact_prefix="stage5_polish/correctness",
+            correctness_shapes=correctness_shapes,
         )
         self.store.write_json(
             run_id,

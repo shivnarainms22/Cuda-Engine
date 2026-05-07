@@ -19,6 +19,7 @@ class SynthesisConfig(BaseModel):
     perf_target_speedup_vs_torch_compile: float = 1.0
     correctness_rtol: float = 1e-3
     correctness_atol: float = 1e-3
+    correctness_shapes: tuple[tuple[int, ...], ...] = ((0,), (1,), (127,), (128,), (1024,), (4097,))
     nvcc_flags: tuple[str, ...] = ("-O3", "--use_fast_math")
     artifact_root: str | None = None
     performance_shape_n: int = 1_048_576

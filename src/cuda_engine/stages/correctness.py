@@ -19,6 +19,7 @@ class Stage3Correctness(Stage):
         run_id: str,
         retry_budget: int = 3,
         artifact_prefix: str = "stage3_correctness",
+        correctness_shapes: tuple[tuple[int, ...], ...] = CORRECTNESS_SHAPES,
     ) -> CorrectnessReport:
         if self.gpu is None or self.store is None:
             raise RuntimeError("Stage3Correctness requires gpu and store services")
@@ -36,7 +37,7 @@ class Stage3Correctness(Stage):
         max_rel_err = 0.0
         shape_results: list[dict[str, Any]] = []
         failing_inputs: list[dict[str, Any]] = []
-        for shape in CORRECTNESS_SHAPES:
+        for shape in correctness_shapes:
             inputs = _make_inputs(spec, shape=shape)
             expected = _as_output_list(reference(*inputs))
             run_result = self.gpu.run_kernel(artifact.kernel_so_path, inputs)
@@ -56,7 +57,7 @@ class Stage3Correctness(Stage):
             passed=not failing_inputs,
             max_abs_err=max_abs_err,
             max_rel_err=max_rel_err,
-            shapes_tested=list(CORRECTNESS_SHAPES),
+            shapes_tested=list(correctness_shapes),
             shape_results=shape_results,
             failing_inputs=failing_inputs,
         )
@@ -88,11 +89,17 @@ def _concrete_shape(symbolic_shape: tuple[str, ...], *, fallback: tuple[int, ...
     if not symbolic_shape:
         return fallback
     values: list[int] = []
+    symbol_values: dict[str, int] = {}
+    next_fallback_index = 0
     for dim in symbolic_shape:
         try:
             values.append(int(dim))
         except ValueError:
-            values.append(fallback[0])
+            if dim not in symbol_values:
+                fallback_index = min(next_fallback_index, len(fallback) - 1)
+                symbol_values[dim] = fallback[fallback_index]
+                next_fallback_index += 1
+            values.append(symbol_values[dim])
     return tuple(values)
 
 

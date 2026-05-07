@@ -42,7 +42,8 @@ class Stage4Performance(Stage):
             _write_report(self.store, run_id, report)
             return report
 
-        inputs = _make_inputs(spec, shape=(self.cfg.performance_shape_n,))
+        benchmark_shape = _benchmark_shape(spec, total_elements=self.cfg.performance_shape_n)
+        inputs = _make_inputs(spec, shape=benchmark_shape)
         benchmark = self.gpu.benchmark_kernel(
             artifact.kernel_so_path,
             inputs,
@@ -80,6 +81,14 @@ def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float:
     if baseline_ms is None or custom_ms <= 0:
         return 1.0
     return baseline_ms / custom_ms
+
+
+def _benchmark_shape(spec: KernelSpec, *, total_elements: int) -> tuple[int, ...]:
+    rank = max((len(arg.shape) for arg in spec.inputs), default=1)
+    if rank <= 1:
+        return (total_elements,)
+    dim = max(1, round(total_elements ** (1 / rank)))
+    return tuple(dim for _ in range(rank))
 
 
 def _write_report(store: ArtifactStore, run_id: str, report: PerformanceReport) -> None:

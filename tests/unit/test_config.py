@@ -24,3 +24,9 @@ def test_benchmark_defaults_are_large_enough_for_gpu_timing() -> None:
     assert config.performance_shape_n == 1_048_576
     assert config.benchmark_warmup_iterations == 10
     assert config.benchmark_timed_iterations == 100
+
+
+def test_correctness_shape_grid_defaults_to_vector_smoke_shapes() -> None:
+    config = SynthesisConfig()
+
+    assert config.correctness_shapes == ((0,), (1,), (127,), (128,), (1024,), (4097,))

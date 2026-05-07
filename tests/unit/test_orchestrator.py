@@ -10,6 +10,7 @@ from cuda_engine.services.llm.mocks import MockLLMClient
 from cuda_engine.services.store.mocks import InMemoryStore
 
 SPEC_JSON = """{"name":"identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["N"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["N"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
+MATRIX_SPEC_JSON = """{"name":"matrix_identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["B","D"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["B","D"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
 
 SHAPE_SIZES = (0, 1, 127, 128, 1024, 4097)
 
@@ -80,6 +81,44 @@ def test_orchestrator_happy_path_with_mocks() -> None:
     assert orchestrator.gpu.benchmark_calls[0]["input_shapes"] == [(256,)]
     assert orchestrator.gpu.benchmark_calls[0]["warmup_iterations"] == 2
     assert orchestrator.gpu.benchmark_calls[0]["timed_iterations"] == 3
+
+
+def test_orchestrator_passes_configured_correctness_shapes() -> None:
+    torch = __import__("torch")
+    store = InMemoryStore()
+    orchestrator = Orchestrator(
+        llm=MockLLMClient(
+            responses=[
+                MATRIX_SPEC_JSON,
+                LLMResponse(
+                    text="```cuda\nextern code\n```",
+                    model="mock",
+                    tool_calls=[
+                        {
+                            "name": "compile_kernel",
+                            "input": {"src": "extern code", "target_arch": "sm_80"},
+                        }
+                    ],
+                ),
+                "```cuda\n// annotated\nextern code\n```",
+            ]
+        ),
+        gpu=MockGPURunner(
+            compile_results=[CompileResult(ok=True, so_path=Path("kernel.so"), log="ok")],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(6, dtype=torch.float32).reshape(2, 3)]),
+                RunResult(ok=True, output_tensors=[torch.arange(20, dtype=torch.float32).reshape(4, 5)]),
+            ],
+        ),
+        store=store,
+        cfg=SynthesisConfig(correctness_shapes=((2, 3), (4, 5))),
+    )
+
+    result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+    assert result.passed is True
+    assert result.correctness is not None
+    assert result.correctness.shapes_tested == [(2, 3), (4, 5)]
 
 
 def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:

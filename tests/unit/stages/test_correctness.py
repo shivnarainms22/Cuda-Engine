@@ -25,6 +25,17 @@ def _identity_spec() -> KernelSpec:
     )
 
 
+def _matrix_spec() -> KernelSpec:
+    return KernelSpec(
+        name="matrix_identity",
+        target_arch="sm_80",
+        inputs=[TensorArg(name="x", dtype="fp32", shape=("B", "D"))],
+        outputs=[TensorArg(name="out", dtype="fp32", shape=("B", "D"))],
+        precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
+        optimization_priority=OptimizationPriority.BALANCED,
+    )
+
+
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
@@ -56,6 +67,31 @@ def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
         (4097,),
     ]
     assert all(shape["passed"] for shape in report.shape_results)
+
+
+def test_stage3_correctness_uses_custom_multidimensional_shape_grid() -> None:
+    torch = __import__("torch")
+    stage = Stage3Correctness(
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(6, dtype=torch.float32).reshape(2, 3)]),
+                RunResult(ok=True, output_tensors=[torch.arange(20, dtype=torch.float32).reshape(4, 5)]),
+            ]
+        ),
+        store=InMemoryStore(),
+    )
+
+    report = stage.run(
+        spec=_matrix_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        reference=lambda x: x,
+        run_id="run123",
+        correctness_shapes=((2, 3), (4, 5)),
+    )
+
+    assert report.passed is True
+    assert report.shapes_tested == [(2, 3), (4, 5)]
+    assert [shape["shape"] for shape in report.shape_results] == [(2, 3), (4, 5)]
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
@@ -152,3 +188,45 @@ def test_stage3_input_generation_uses_cuda_when_available(monkeypatch) -> None:
     correctness._make_inputs(_identity_spec(), shape=(128,))
 
     assert ("to", {"dtype": "float32", "device": "cuda"}) in fake_torch.calls
+
+
+def test_make_inputs_maps_symbolic_dimensions_to_matching_shape_positions(monkeypatch) -> None:
+    class FakeTensor:
+        def __init__(self, calls: list[tuple[str, object]]) -> None:
+            self.calls = calls
+
+        def reshape(self, shape):
+            self.calls.append(("reshape", shape))
+            return self
+
+        def to(self, **kwargs):
+            self.calls.append(("to", kwargs))
+            return self
+
+        def __add__(self, other):
+            self.calls.append(("add", other))
+            return self
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class FakeTorch:
+        float32 = "float32"
+        cuda = FakeCuda()
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def arange(self, n, dtype):
+            self.calls.append(("arange", {"n": n, "dtype": dtype}))
+            return FakeTensor(self.calls)
+
+    fake_torch = FakeTorch()
+    monkeypatch.setattr(correctness, "_torch", lambda: fake_torch)
+
+    correctness._make_inputs(_matrix_spec(), shape=(2, 3))
+
+    assert ("arange", {"n": 6, "dtype": "float32"}) in fake_torch.calls
+    assert ("reshape", (2, 3)) in fake_torch.calls

@@ -79,6 +79,7 @@ class Orchestrator:
                 reference=reference,
                 run_id=run_id,
                 retry_budget=self.cfg.retry_budgets.correctness,
+                correctness_shapes=self.cfg.correctness_shapes,
             ),
             succeeded=lambda report: report.passed,
         )
@@ -118,6 +119,7 @@ class Orchestrator:
                     reference=reference,
                     run_id=run_id,
                     retry_budget=self.cfg.retry_budgets.correctness,
+                    correctness_shapes=self.cfg.correctness_shapes,
                 )
 
             correctness = _run_traced_stage(
@@ -166,6 +168,7 @@ class Orchestrator:
                 performance=performance,
                 reference=reference,
                 run_id=run_id,
+                correctness_shapes=self.cfg.correctness_shapes,
             ),
         )
 

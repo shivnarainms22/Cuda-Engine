@@ -88,6 +88,24 @@ def test_stage4_performance_uses_configured_benchmark_settings() -> None:
     ]
 
 
+def test_stage4_performance_derives_rank_aware_benchmark_shape() -> None:
+    store = InMemoryStore()
+    gpu = MockGPURunner()
+    stage = Stage4Performance(
+        gpu=gpu,
+        store=store,
+        cfg=SynthesisConfig(performance_shape_n=16),
+    )
+
+    stage.run(
+        spec=_matrix_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        run_id="run123",
+    )
+
+    assert gpu.benchmark_calls[0]["input_shapes"] == [(4, 4)]
+
+
 def test_stage4_performance_reports_missing_shared_object() -> None:
     store = InMemoryStore()
     stage = Stage4Performance(gpu=MockGPURunner(), store=store)
@@ -113,6 +131,17 @@ def _spec() -> KernelSpec:
             TensorArg(name="y", dtype="fp32", shape=("N",)),
         ],
         outputs=[TensorArg(name="out", dtype="fp32", shape=("N",))],
+        precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
+        optimization_priority=OptimizationPriority.THROUGHPUT,
+    )
+
+
+def _matrix_spec() -> KernelSpec:
+    return KernelSpec(
+        name="matrix_identity",
+        target_arch="sm_80",
+        inputs=[TensorArg(name="x", dtype="fp32", shape=("B", "D"))],
+        outputs=[TensorArg(name="out", dtype="fp32", shape=("B", "D"))],
         precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
         optimization_priority=OptimizationPriority.THROUGHPUT,
     )
