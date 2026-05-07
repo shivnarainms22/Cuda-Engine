@@ -146,8 +146,19 @@ class LocalGPURunner(GPURunner):
                 wall_seconds=time.time() - started_at,
             )
 
-        with output_path.open("rb") as f:
-            payload = pickle.load(f)
+        try:
+            with output_path.open("rb") as f:
+                payload = pickle.load(f)
+        except (EOFError, pickle.PickleError, OSError) as exc:
+            return RunResult(
+                ok=False,
+                stdout=completed.stdout,
+                stderr=_join_streams(
+                    f"run_kernel child could not decode output payload: {exc}",
+                    completed.stderr,
+                ),
+                wall_seconds=time.time() - started_at,
+            )
         child_stdout = str(payload.get("stdout", ""))
         child_stderr = str(payload.get("stderr", ""))
         return RunResult(

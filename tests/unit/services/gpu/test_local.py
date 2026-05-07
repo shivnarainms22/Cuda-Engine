@@ -135,6 +135,23 @@ def test_local_gpu_runner_run_kernel_reports_child_failure(monkeypatch) -> None:
     assert result.stderr == "boom\nparent err"
 
 
+def test_local_gpu_runner_run_kernel_reports_corrupt_child_payload(monkeypatch) -> None:
+    def fake_run(cmd, capture_output, text, timeout, check):
+        output_path = Path(cmd[cmd.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"")
+        return SimpleNamespace(returncode=1, stdout="parent out", stderr="child crashed")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    result = runner.run_kernel(Path("/tmp/kernel.so"), inputs=[], timeout_seconds=7)
+
+    assert result.ok is False
+    assert "could not decode output payload" in result.stderr
+    assert "child crashed" in result.stderr
+
+
 def test_local_gpu_runner_run_kernel_timeout(monkeypatch) -> None:
     def fake_run(cmd, capture_output, text, timeout, check):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout, output="out", stderr="err")
