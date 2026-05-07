@@ -59,6 +59,7 @@ def _print_report_summary(report_path: Path) -> None:
         typer.echo("Correctness: not available")
 
     _print_performance(performance, report_path.parent)
+    _print_repair_artifacts(report_path.parent)
 
     warnings = _strings(report.get("warnings"))
     if warnings:
@@ -160,3 +161,22 @@ def _print_performance(performance: object, run_dir: Path) -> None:
     benchmark_path = run_dir / "stage4_performance" / "benchmark.json"
     if benchmark_path.exists():
         typer.echo(f"Benchmark: {benchmark_path}")
+
+
+def _print_repair_artifacts(run_dir: Path) -> None:
+    repair_root = run_dir / "stage3_repair"
+    if not repair_root.exists():
+        return
+
+    attempt_dirs = sorted(path for path in repair_root.glob("attempt_*") if path.is_dir())
+    if not attempt_dirs:
+        return
+
+    typer.echo(f"Correctness repairs: {len(attempt_dirs)}")
+    for attempt_dir in attempt_dirs:
+        report_path = attempt_dir / "correctness_report.json"
+        kernel_path = attempt_dir / "codegen" / "final" / "kernel.cu"
+        if report_path.exists():
+            typer.echo(f"- correctness_report: {report_path}")
+        if kernel_path.exists():
+            typer.echo(f"- repaired_kernel: {kernel_path}")

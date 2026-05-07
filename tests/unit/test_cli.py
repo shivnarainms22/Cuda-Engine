@@ -79,6 +79,11 @@ def test_show_report_prints_compact_success_summary() -> None:
     benchmark_path = run_dir / "stage4_performance" / "benchmark.json"
     benchmark_path.parent.mkdir()
     benchmark_path.write_text("{}", encoding="utf-8")
+    repair_report_path = run_dir / "stage3_repair" / "attempt_01" / "correctness_report.json"
+    repair_kernel_path = run_dir / "stage3_repair" / "attempt_01" / "codegen" / "final" / "kernel.cu"
+    repair_kernel_path.parent.mkdir(parents=True)
+    repair_report_path.write_text("{}", encoding="utf-8")
+    repair_kernel_path.write_text("fixed", encoding="utf-8")
 
     result = CliRunner().invoke(app, ["show-report", str(run_dir)])
 
@@ -98,6 +103,9 @@ def test_show_report_prints_compact_success_summary() -> None:
     assert "Below target: false" in result.stdout
     assert "Performance notes: benchmark stable" in result.stdout
     assert f"Benchmark: {benchmark_path}" in result.stdout
+    assert "Correctness repairs: 1" in result.stdout
+    assert f"- correctness_report: {repair_report_path}" in result.stdout
+    assert f"- repaired_kernel: {repair_kernel_path}" in result.stdout
     assert f"Artifacts: {run_dir}" in result.stdout
 
 
