@@ -1,6 +1,10 @@
+from collections.abc import Callable
+from typing import Any
+
 from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec, PerformanceReport
 from cuda_engine.prompts import load_prompt
 from cuda_engine.stages.base import Stage
+from cuda_engine.stages.correctness import Stage3Correctness
 
 
 class Stage5Polish(Stage):
@@ -13,10 +17,11 @@ class Stage5Polish(Stage):
         artifact: KernelArtifact,
         correctness: CorrectnessReport,
         performance: PerformanceReport,
+        reference: Callable[..., Any],
         run_id: str,
     ) -> KernelArtifact:
-        if self.llm is None or self.store is None:
-            raise RuntimeError("Stage5Polish requires llm and store services")
+        if self.llm is None or self.gpu is None or self.store is None:
+            raise RuntimeError("Stage5Polish requires llm, gpu, and store services")
 
         source = _read_artifact_source(artifact, run_id, self.store)
         user_content = (
@@ -45,11 +50,81 @@ class Stage5Polish(Stage):
             annotated,
         )
         self.store.write_text(run_id, "stage5_polish/llm_response.md", response.text)
-        return KernelArtifact(
+
+        compile_result = self.gpu.compile(annotated, target_arch=spec.target_arch)
+        self.store.write_text(run_id, "stage5_polish/compile.log", compile_result.log)
+        self.store.write_json(run_id, "stage5_polish/compile_result.json", compile_result)
+        if not compile_result.ok or compile_result.so_path is None:
+            self.store.write_json(
+                run_id,
+                "stage5_polish/status.json",
+                {
+                    "accepted": False,
+                    "reason": "compile failed",
+                    "kernel_cu_path": str(annotated_path),
+                },
+            )
+            return artifact
+
+        candidate = KernelArtifact(
             kernel_cu_path=annotated_path,
-            kernel_so_path=artifact.kernel_so_path,
-            compile_log=artifact.compile_log,
-            ptx_size_bytes=artifact.ptx_size_bytes,
+            kernel_so_path=compile_result.so_path,
+            compile_log=compile_result.log,
+            ptx_size_bytes=compile_result.ptx_size_bytes,
+        )
+        polish_correctness = Stage3Correctness(gpu=self.gpu, store=self.store).run(
+            spec=spec,
+            artifact=candidate,
+            reference=reference,
+            run_id=run_id,
+            artifact_prefix="stage5_polish/correctness",
+        )
+        self.store.write_json(
+            run_id,
+            "stage5_polish/correctness_report.json",
+            polish_correctness.model_dump(mode="json"),
+        )
+        if not polish_correctness.passed:
+            self.store.write_json(
+                run_id,
+                "stage5_polish/status.json",
+                {
+                    "accepted": False,
+                    "reason": "correctness failed",
+                    "kernel_cu_path": str(annotated_path),
+                },
+            )
+            return artifact
+
+        final_kernel = self.store.write_text(run_id, "stage5_polish/final/kernel.cu", annotated)
+        final_so = compile_result.so_path
+        if compile_result.so_path.exists():
+            final_so = self.store.write_bytes(
+                run_id,
+                "stage5_polish/final/kernel.so",
+                compile_result.so_path.read_bytes(),
+            )
+        else:
+            self.store.write_text(
+                run_id,
+                "stage5_polish/final/kernel.so.path",
+                str(compile_result.so_path),
+            )
+        self.store.write_json(
+            run_id,
+            "stage5_polish/status.json",
+            {
+                "accepted": True,
+                "reason": "validated",
+                "kernel_cu_path": str(final_kernel),
+                "kernel_so_path": str(final_so),
+            },
+        )
+        return KernelArtifact(
+            kernel_cu_path=final_kernel,
+            kernel_so_path=final_so,
+            compile_log=compile_result.log,
+            ptx_size_bytes=compile_result.ptx_size_bytes,
         )
 
 

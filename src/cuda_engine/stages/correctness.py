@@ -18,6 +18,7 @@ class Stage3Correctness(Stage):
         reference: Callable[..., Any],
         run_id: str,
         retry_budget: int = 3,
+        artifact_prefix: str = "stage3_correctness",
     ) -> CorrectnessReport:
         if self.gpu is None or self.store is None:
             raise RuntimeError("Stage3Correctness requires gpu and store services")
@@ -59,7 +60,7 @@ class Stage3Correctness(Stage):
             shape_results=shape_results,
             failing_inputs=failing_inputs,
         )
-        self.store.write_json(run_id, "stage3_correctness/report.json", report.model_dump(mode="json"))
+        self.store.write_json(run_id, f"{artifact_prefix}/report.json", report.model_dump(mode="json"))
         return report
 
 

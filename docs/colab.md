@@ -186,6 +186,7 @@ The report includes:
 - LLM token totals
 - correctness report
 - performance report
+- polish validation status and polished kernel path, when available
 - artifact directory
 
 ## 8. Run A Manual Synthesis Call

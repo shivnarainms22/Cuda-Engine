@@ -59,6 +59,7 @@ def _print_report_summary(report_path: Path) -> None:
         typer.echo("Correctness: not available")
 
     _print_performance(performance, report_path.parent)
+    _print_polish_artifacts(report_path.parent)
     _print_repair_artifacts(report_path.parent)
 
     warnings = _strings(report.get("warnings"))
@@ -180,3 +181,31 @@ def _print_repair_artifacts(run_dir: Path) -> None:
             typer.echo(f"- correctness_report: {report_path}")
         if kernel_path.exists():
             typer.echo(f"- repaired_kernel: {kernel_path}")
+
+
+def _print_polish_artifacts(run_dir: Path) -> None:
+    status_path = run_dir / "stage5_polish" / "status.json"
+    if not status_path.exists():
+        return
+
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        typer.echo(f"Polish: status unreadable at {status_path}")
+        return
+    if not isinstance(status, dict):
+        typer.echo(f"Polish: status unreadable at {status_path}")
+        return
+
+    accepted = bool(status.get("accepted", False))
+    typer.echo(f"Polish: {'accepted' if accepted else 'rejected'}")
+    reason = status.get("reason")
+    if reason:
+        typer.echo(f"Polish reason: {reason}")
+
+    kernel_path = run_dir / "stage5_polish" / "final" / "kernel.cu"
+    if not kernel_path.exists():
+        raw_path = status.get("kernel_cu_path")
+        kernel_path = Path(str(raw_path)) if raw_path else kernel_path
+    if kernel_path.exists() or status.get("kernel_cu_path"):
+        typer.echo(f"Polished kernel: {kernel_path}")

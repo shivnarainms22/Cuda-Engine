@@ -155,15 +155,16 @@ class Orchestrator:
                 retry_budget=self.cfg.retry_budgets.performance,
             ),
         )
-        _run_traced_stage(
+        artifact = _run_traced_stage(
             stage_traces,
             llm,
             "polish",
-            lambda: Stage5Polish(llm=llm, store=self.store).run(
+            lambda: Stage5Polish(llm=llm, gpu=self.gpu, store=self.store).run(
                 spec=spec,
                 artifact=artifact,
                 correctness=correctness,
                 performance=performance,
+                reference=reference,
                 run_id=run_id,
             ),
         )
