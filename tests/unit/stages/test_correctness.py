@@ -36,6 +36,20 @@ def _matrix_spec() -> KernelSpec:
     )
 
 
+def _scalar_multiply_spec() -> KernelSpec:
+    return KernelSpec(
+        name="scalar_multiply",
+        target_arch="sm_80",
+        inputs=[
+            TensorArg(name="x", dtype="fp32", shape=("N",)),
+            TensorArg(name="alpha", dtype="fp32", shape=()),
+        ],
+        outputs=[TensorArg(name="out", dtype="fp32", shape=("N",))],
+        precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
+        optimization_priority=OptimizationPriority.THROUGHPUT,
+    )
+
+
 def test_stage3_correctness_passes_when_kernel_matches_reference() -> None:
     torch = __import__("torch")
     stage = Stage3Correctness(
@@ -92,6 +106,30 @@ def test_stage3_correctness_uses_custom_multidimensional_shape_grid() -> None:
     assert report.passed is True
     assert report.shapes_tested == [(2, 3), (4, 5)]
     assert [shape["shape"] for shape in report.shape_results] == [(2, 3), (4, 5)]
+
+
+def test_stage3_correctness_supports_scalar_tensor_inputs() -> None:
+    torch = __import__("torch")
+    stage = Stage3Correctness(
+        gpu=MockGPURunner(
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(3, dtype=torch.float32)]),
+                RunResult(ok=True, output_tensors=[torch.arange(5, dtype=torch.float32)]),
+            ]
+        ),
+        store=InMemoryStore(),
+    )
+
+    report = stage.run(
+        spec=_scalar_multiply_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
+        reference=lambda x, alpha: x * alpha,
+        run_id="run123",
+        correctness_shapes=((3,), (5,)),
+    )
+
+    assert report.passed is True
+    assert report.shapes_tested == [(3,), (5,)]
 
 
 def test_stage3_correctness_fails_when_kernel_differs_from_reference() -> None:
@@ -230,3 +268,11 @@ def test_make_inputs_maps_symbolic_dimensions_to_matching_shape_positions(monkey
 
     assert ("arange", {"n": 6, "dtype": "float32"}) in fake_torch.calls
     assert ("reshape", (2, 3)) in fake_torch.calls
+
+
+def test_make_inputs_preserves_zero_rank_scalar_shapes() -> None:
+    x, alpha = correctness._make_inputs(_scalar_multiply_spec(), shape=(8,))
+
+    assert tuple(x.shape) == (8,)
+    assert tuple(alpha.shape) == ()
+    assert alpha.ndim == 0

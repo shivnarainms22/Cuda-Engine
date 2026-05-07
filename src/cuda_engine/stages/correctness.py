@@ -87,7 +87,7 @@ def _make_inputs(spec: KernelSpec, *, shape: tuple[int, ...]) -> list[Any]:
 
 def _concrete_shape(symbolic_shape: tuple[str, ...], *, fallback: tuple[int, ...]) -> tuple[int, ...]:
     if not symbolic_shape:
-        return fallback
+        return ()
     values: list[int] = []
     symbol_values: dict[str, int] = {}
     next_fallback_index = 0

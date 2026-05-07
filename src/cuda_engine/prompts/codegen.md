@@ -13,6 +13,7 @@ Required runnable ABI:
 
 Rules:
 - Honor the target architecture and the frozen input/output contract.
+- Treat KernelSpec inputs with `shape: []` as scalar/0-D Torch tensors, not vectors.
 - For `sm_80`, prefer straightforward CUDA C++ suitable for A100.
 - Make memory hierarchy choices explicit in comments when they affect performance.
 - Use 256 threads per block as the default elementwise baseline unless the spec suggests otherwise.
