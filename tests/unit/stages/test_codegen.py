@@ -49,7 +49,7 @@ def test_stage2_codegen_happy_path_routes_compile_tool_call() -> None:
     )
     stage = Stage2Codegen(llm=MockLLMClient([_compile_call()]), gpu=gpu, store=store)
 
-    artifact = stage.run(spec=_spec(), run_id="run123", retry_budget=3)
+    artifact = stage.run(spec=_spec(), run_id="run123", retry_budget=3, model="claude-sonnet-4-6")
 
     assert artifact.kernel_so_path == Path("/tmp/kernel.so")
     assert store._files[("run123", "stage2_codegen/attempt_01/kernel.cu")] == b"extern code"
@@ -67,7 +67,7 @@ def test_stage2_codegen_retries_after_compile_error() -> None:
     )
     stage = Stage2Codegen(llm=llm, gpu=gpu, store=store)
 
-    artifact = stage.run(spec=_spec(), run_id="run123", retry_budget=3)
+    artifact = stage.run(spec=_spec(), run_id="run123", retry_budget=3, model="claude-sonnet-4-6")
 
     assert artifact.kernel_cu_path.as_posix().endswith("stage2_codegen/final/kernel.cu")
     assert artifact.kernel_so_path == Path("/tmp/kernel.so")
@@ -99,6 +99,7 @@ def test_stage2_codegen_accepts_correctness_repair_context_and_custom_prefix() -
         spec=_spec(),
         run_id="run123",
         retry_budget=1,
+        model="claude-sonnet-4-6",
         repair_context=correctness,
         artifact_prefix="stage3_repair/attempt_01/codegen",
     )
@@ -124,7 +125,7 @@ def test_stage2_codegen_raises_when_retry_budget_exhausted() -> None:
     )
 
     with pytest.raises(BudgetExhaustedError) as exc_info:
-        stage.run(spec=_spec(), run_id="run123", retry_budget=2)
+        stage.run(spec=_spec(), run_id="run123", retry_budget=2, model="claude-sonnet-4-6")
     assert "codegen exhausted retry budget" in str(exc_info.value)
     assert "last nvcc log" in str(exc_info.value)
     assert store._files[("run123", "stage2_codegen/attempt_01/compile_log.txt")] == b"bad1"

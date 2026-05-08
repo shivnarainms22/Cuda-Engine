@@ -17,6 +17,7 @@ class Stage2Codegen(Stage):
         *,
         spec: KernelSpec,
         run_id: str,
+        model: str,
         retry_budget: int = 3,
         repair_context: CorrectnessReport | None = None,
         artifact_prefix: str = "stage2_codegen",
@@ -49,7 +50,7 @@ class Stage2Codegen(Stage):
                 system=system,
                 messages=messages,
                 tools=[COMPILE_KERNEL],
-                model="claude-sonnet-4-6",
+                model=model,
             )
             src = _source_from_response(response.text, response.tool_calls)
             attempt_dir = f"{artifact_prefix}/attempt_{attempt:02d}"
