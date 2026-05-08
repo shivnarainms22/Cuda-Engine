@@ -19,6 +19,7 @@ class Stage5Polish(Stage):
         performance: PerformanceReport,
         reference: Callable[..., Any],
         run_id: str,
+        model: str,
         correctness_shapes: tuple[tuple[int, ...], ...] = CORRECTNESS_SHAPES,
     ) -> KernelArtifact:
         if self.llm is None or self.gpu is None or self.store is None:
@@ -42,7 +43,7 @@ class Stage5Polish(Stage):
             ],
             messages=[{"role": "user", "content": user_content}],
             tools=None,
-            model="claude-sonnet-4-6",
+            model=model,
         )
         annotated = _extract_cuda_source(response.text)
         annotated_path = self.store.write_text(

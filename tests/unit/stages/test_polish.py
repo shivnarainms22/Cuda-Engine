@@ -62,6 +62,7 @@ def test_stage5_polish_writes_annotated_kernel() -> None:
         performance=PerformanceReport(speedup_vs_reference=1.0, speedup_vs_torch_compile=1.0),
         reference=lambda x, y: x,
         run_id="run123",
+        model="claude-sonnet-4-6",
     )
 
     assert artifact.kernel_cu_path.as_posix().endswith("stage5_polish/final/kernel.cu")
@@ -104,6 +105,7 @@ def test_stage5_polish_keeps_verified_kernel_when_annotation_does_not_compile() 
         performance=PerformanceReport(speedup_vs_reference=1.0, speedup_vs_torch_compile=1.0),
         reference=lambda x, y: x,
         run_id="run123",
+        model="claude-sonnet-4-6",
     )
 
     assert artifact == original
