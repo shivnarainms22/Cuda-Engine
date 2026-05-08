@@ -27,4 +27,6 @@ class SynthesisConfig(BaseModel):
     benchmark_timed_iterations: int = 100
     sonnet_model: str = "claude-sonnet-4-6"
     opus_model: str = "claude-opus-4-7"
+    opus_retry_budget_codegen: int = 3
+    opus_retry_budget_performance: int = 1
     request_timeout_seconds: int = 120
