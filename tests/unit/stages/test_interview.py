@@ -33,6 +33,7 @@ def test_stage1_interview_parses_kernel_spec_from_fenced_json() -> None:
         reference=lambda x, y: x + y,
         target_arch="sm_80",
         run_id="run123",
+        model="claude-sonnet-4-6",
     )
 
     assert spec.name == "vector_add"
@@ -46,7 +47,7 @@ def test_stage1_interview_rejects_invalid_json() -> None:
     stage = Stage1Interview(llm=MockLLMClient(["not json"]), store=InMemoryStore())
 
     with pytest.raises(StructuralStageError, match="KernelSpec JSON"):
-        stage.run(prompt="bad", reference=lambda x: x, target_arch="sm_80", run_id="run123")
+        stage.run(prompt="bad", reference=lambda x: x, target_arch="sm_80", run_id="run123", model="claude-sonnet-4-6")
 
 
 def test_stage1_interview_normalizes_contiguous_layout_hint() -> None:
@@ -77,7 +78,7 @@ def test_stage1_interview_returns_frozen_spec() -> None:
         store=InMemoryStore(),
     )
 
-    spec = stage.run(prompt="identity", reference=lambda x: x, target_arch="sm_80", run_id="run123")
+    spec = stage.run(prompt="identity", reference=lambda x: x, target_arch="sm_80", run_id="run123", model="claude-sonnet-4-6")
 
     with pytest.raises(ValidationError):
         spec.name = "mutated"
