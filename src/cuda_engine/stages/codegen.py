@@ -5,7 +5,7 @@ from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec
 from cuda_engine.prompts import load_prompt
 from cuda_engine.services.gpu.base import CompileResult
 from cuda_engine.services.llm.tools import COMPILE_KERNEL
-from cuda_engine.stages.base import BudgetExhaustedError, Stage
+from cuda_engine.stages.base import BudgetExhaustedError, SonnetFailureSummary, Stage
 from cuda_engine.targets import load_target_caps
 
 
@@ -45,6 +45,7 @@ class Stage2Codegen(Stage):
         ]
 
         last_result: CompileResult | None = None
+        last_src: str = ""
         for attempt in range(1, retry_budget + 1):
             response = self.llm.complete(
                 system=system,
@@ -53,6 +54,7 @@ class Stage2Codegen(Stage):
                 model=model,
             )
             src = _source_from_response(response.text, response.tool_calls)
+            last_src = src
             attempt_dir = f"{artifact_prefix}/attempt_{attempt:02d}"
             kernel_path = self.store.write_text(run_id, f"{attempt_dir}/kernel.cu", src)
             self.store.write_text(run_id, f"{attempt_dir}/llm_response.md", response.text)
@@ -113,9 +115,18 @@ class Stage2Codegen(Stage):
                 }
             )
 
+        errors_str = "" if last_result is None else "\n".join(last_result.errors)
+        log_str = "" if last_result is None else last_result.log
+        summary = SonnetFailureSummary(
+            last_compile_errors=errors_str,
+            last_compile_log=log_str,
+            last_source_attempt=last_src,
+            attempts_made=retry_budget,
+        )
         raise BudgetExhaustedError(
             f"codegen exhausted retry budget after {retry_budget} attempts: "
-            f"{_exhausted_budget_detail(last_result)}"
+            f"{_exhausted_budget_detail(last_result)}",
+            summary=summary,
         )
 
 

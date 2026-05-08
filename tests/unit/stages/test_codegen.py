@@ -130,3 +130,27 @@ def test_stage2_codegen_raises_when_retry_budget_exhausted() -> None:
     assert "last nvcc log" in str(exc_info.value)
     assert store._files[("run123", "stage2_codegen/attempt_01/compile_log.txt")] == b"bad1"
     assert store._files[("run123", "stage2_codegen/attempt_02/compile_log.txt")] == b"last nvcc log"
+
+
+def test_stage2_codegen_budget_exhausted_carries_summary() -> None:
+    store = InMemoryStore()
+    stage = Stage2Codegen(
+        llm=MockLLMClient([_compile_call("bad1"), _compile_call("bad2")]),
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=False, log="log-1", errors=["err-1"]),
+                CompileResult(ok=False, log="log-2", errors=["err-2"]),
+            ]
+        ),
+        store=store,
+    )
+
+    with pytest.raises(BudgetExhaustedError) as exc_info:
+        stage.run(spec=_spec(), run_id="run123", retry_budget=2, model="claude-sonnet-4-6")
+
+    summary = exc_info.value.summary
+    assert summary is not None
+    assert summary.attempts_made == 2
+    assert "err-2" in summary.last_compile_errors
+    assert "log-2" in summary.last_compile_log
+    assert summary.last_source_attempt == "bad2"
