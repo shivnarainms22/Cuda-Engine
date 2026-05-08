@@ -16,6 +16,7 @@ from cuda_engine.models import (
 from cuda_engine.services.gpu.base import GPURunner
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.store.base import ArtifactStore
+from cuda_engine.stages.base import BudgetExhaustedError
 from cuda_engine.stages.codegen import Stage2Codegen
 from cuda_engine.stages.correctness import Stage3Correctness
 from cuda_engine.stages.interview import Stage1Interview
@@ -64,11 +65,16 @@ class Orchestrator:
             stage_traces,
             llm,
             "codegen",
-            lambda: Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
-                spec=spec,
-                run_id=run_id,
-                model=self.cfg.sonnet_model,
-                retry_budget=self.cfg.retry_budgets.codegen,
+            lambda: _run_codegen_with_escalation(
+                llm=llm,
+                gpu=self.gpu,
+                store=self.store,
+                cfg=self.cfg,
+                run_args={
+                    "spec": spec,
+                    "run_id": run_id,
+                    "retry_budget": self.cfg.retry_budgets.codegen,
+                },
             ),
         )
         correctness = _run_traced_stage(
@@ -99,13 +105,18 @@ class Orchestrator:
                 correctness_report: CorrectnessReport = correctness,
                 repair_prefix: str = repair_dir,
             ) -> KernelArtifact:
-                return Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
-                    spec=spec,
-                    run_id=run_id,
-                    model=self.cfg.sonnet_model,
-                    retry_budget=self.cfg.retry_budgets.codegen,
-                    repair_context=correctness_report,
-                    artifact_prefix=f"{repair_prefix}/codegen",
+                return _run_codegen_with_escalation(
+                    llm=llm,
+                    gpu=self.gpu,
+                    store=self.store,
+                    cfg=self.cfg,
+                    run_args={
+                        "spec": spec,
+                        "run_id": run_id,
+                        "retry_budget": self.cfg.retry_budgets.codegen,
+                        "repair_context": correctness_report,
+                        "artifact_prefix": f"{repair_prefix}/codegen",
+                    },
                 )
 
             artifact = _run_traced_stage(
@@ -195,6 +206,33 @@ class Orchestrator:
         return result
 
 
+def _run_codegen_with_escalation(
+    *,
+    llm: _TracingLLMClient,
+    gpu: GPURunner,
+    store: ArtifactStore,
+    cfg: SynthesisConfig,
+    run_args: dict[str, Any],
+) -> KernelArtifact:
+    """Run Stage2Codegen with Sonnet, escalating to Opus on BudgetExhaustedError."""
+    try:
+        return Stage2Codegen(llm=llm, gpu=gpu, store=store).run(
+            **run_args, model=cfg.sonnet_model
+        )
+    except BudgetExhaustedError as bust:
+        if not cfg.escalate_to_opus_on_bust or cfg.opus_retry_budget_codegen <= 0:
+            raise
+        opus_run_args = {
+            **run_args,
+            "retry_budget": cfg.opus_retry_budget_codegen,
+            "artifact_prefix": f"{run_args.get('artifact_prefix', 'stage2_codegen')}/escalated",
+            "escalation_context": bust.summary,
+        }
+        return Stage2Codegen(llm=llm, gpu=gpu, store=store).run(
+            **opus_run_args, model=cfg.opus_model
+        )
+
+
 def _reference_source(reference: Callable[..., Any]) -> str:
     try:
         return inspect.getsource(reference)
@@ -225,6 +263,10 @@ class _TracingLLMClient(LLMClient):
             max_tokens=max_tokens,
             temperature=temperature,
         )
+        # Stamp the actual model name used onto the response so _model_summary
+        # reflects which model was invoked (mocks return model="mock" by default).
+        if response.model != model:
+            response = response.model_copy(update={"model": model})
         self.responses.append(response)
         return response
 

@@ -249,3 +249,73 @@ def test_orchestrator_repairs_after_correctness_failure() -> None:
     assert store._files[
         (result.run_id, "stage3_repair/attempt_01/codegen/attempt_01/kernel.cu")
     ] == b"fixed code"
+
+
+def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
+    """Sonnet busts 3x on codegen, Opus succeeds 1st try → run completes via Opus."""
+    torch = __import__("torch")
+    store = InMemoryStore()
+
+    def _fail_compile_response() -> LLMResponse:
+        return LLMResponse(
+            text="```cuda\nbroken\n```",
+            model="mock",
+            tool_calls=[
+                {"name": "compile_kernel", "input": {"src": "broken", "target_arch": "sm_80"}}
+            ],
+        )
+
+    def _ok_compile_response() -> LLMResponse:
+        return LLMResponse(
+            text="```cuda\ngood\n```",
+            model="mock",
+            tool_calls=[
+                {"name": "compile_kernel", "input": {"src": "good", "target_arch": "sm_80"}}
+            ],
+        )
+
+    orchestrator = Orchestrator(
+        llm=MockLLMClient(
+            responses=[
+                SPEC_JSON,                                    # interview (sonnet)
+                _fail_compile_response(),                     # codegen sonnet attempt 1
+                _fail_compile_response(),                     # codegen sonnet attempt 2
+                _fail_compile_response(),                     # codegen sonnet attempt 3 (bust)
+                _ok_compile_response(),                       # codegen opus attempt 1
+                "```cuda\n// annotated\ngood\n```",           # polish
+            ]
+        ),
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=False, log="bad1", errors=["err1"]),
+                CompileResult(ok=False, log="bad2", errors=["err2"]),
+                CompileResult(ok=False, log="bad3", errors=["err3"]),
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),  # polish recompile
+            ],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in SHAPE_SIZES * 2  # both initial correctness + polish-correctness
+            ],
+        ),
+        store=store,
+        cfg=SynthesisConfig(
+            retry_budgets=RetryBudgets(codegen=3),
+            performance_shape_n=256,
+            benchmark_warmup_iterations=2,
+            benchmark_timed_iterations=3,
+        ),
+    )
+
+    result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+    assert result.passed is True
+    codegen_trace = next(t for t in result.report.stage_traces if t.stage_name == "codegen")
+    assert "claude-sonnet-4-6" in codegen_trace.model_used
+    assert "claude-opus-4-7" in codegen_trace.model_used
+    assert codegen_trace.attempts == 4  # 3 sonnet + 1 opus
+    # Opus retry artifact lands under escalated/
+    escalated_files = [
+        key for key in store._files if "stage2_codegen/escalated/attempt_01/" in key[1]
+    ]
+    assert escalated_files, f"expected escalated/ files, got: {list(store._files.keys())[:20]}"
