@@ -254,53 +254,49 @@ class LocalGPURunner(GPURunner):
         )
 
     def profile(self, so_path: Path, inputs: list[Any]) -> NsightMetrics:
-        raise NotImplementedError("LocalGPURunner lands in M1")
+        ncu = shutil.which("ncu")
+        if ncu is None:
+            return NsightMetrics(raw_csv="ncu_not_available")
 
+        run_dir = self.cache_root / "profile_tmp" / uuid.uuid4().hex
+        run_dir.mkdir(parents=True, exist_ok=True)
+        input_path = run_dir / "inputs.pkl"
+        output_path = run_dir / "outputs.pkl"
+        with input_path.open("wb") as f:
+            pickle.dump(inputs, f)
 
-def parse_ncu_csv(csv_text: str) -> NsightMetrics:
-    header_index = _find_csv_header(csv_text)
-    if header_index is None:
-        return NsightMetrics(raw_csv=csv_text)
+        cmd = [
+            ncu,
+            "--csv",
+            "--set",
+            "basic",
+            "--target-processes",
+            "all",
+            "--",
+            sys.executable,
+            "-m",
+            "cuda_engine.services.gpu._run_kernel_child",
+            "--so",
+            str(so_path),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ]
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.cfg.request_timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return NsightMetrics(raw_csv=f"ncu_timeout: {exc}")
 
-    reader = csv.DictReader(io.StringIO(csv_text[header_index:]))
-    occupancy: float | None = None
-    regs_per_thread: int | None = None
-    first_id: str | None = None
-    for row in reader:
-        row_id = row.get("ID", "")
-        if first_id is None:
-            first_id = row_id
-        if row_id != first_id:
-            continue
-        section = (row.get("Section Name") or "").strip()
-        metric = (row.get("Metric Name") or "").strip()
-        value = (row.get("Metric Value") or "").strip()
-        if not value:
-            continue
-        if section == "Occupancy" and metric == "Achieved Occupancy" and occupancy is None:
-            occupancy = _parse_float(value) / 100.0
-        elif (
-            section == "Launch Statistics"
-            and metric == "Registers Per Thread"
-            and regs_per_thread is None
-        ):
-            regs_per_thread = int(_parse_float(value))
-
-    return NsightMetrics(
-        occupancy=occupancy,
-        regs_per_thread=regs_per_thread,
-        raw_csv=csv_text,
-    )
-
-
-def _find_csv_header(csv_text: str) -> int | None:
-    marker = '"ID","Process ID"'
-    index = csv_text.find(marker)
-    return index if index >= 0 else None
-
-
-def _parse_float(value: str) -> float:
-    return float(value.replace(",", ""))
+        if completed.returncode != 0:
+            return NsightMetrics(raw_csv=completed.stderr or completed.stdout or "ncu_failed")
+        return parse_ncu_csv(completed.stdout)
 
     @staticmethod
     def _cache_key(*, src: str, target_arch: str, flags: tuple[str, ...]) -> str:
@@ -353,3 +349,49 @@ def _stringify_timeout_stream(stream: str | bytes | None) -> str:
     if isinstance(stream, bytes):
         return stream.decode(errors="replace")
     return stream
+
+
+def parse_ncu_csv(csv_text: str) -> NsightMetrics:
+    header_index = _find_csv_header(csv_text)
+    if header_index is None:
+        return NsightMetrics(raw_csv=csv_text)
+
+    reader = csv.DictReader(io.StringIO(csv_text[header_index:]))
+    occupancy: float | None = None
+    regs_per_thread: int | None = None
+    first_id: str | None = None
+    for row in reader:
+        row_id = row.get("ID", "")
+        if first_id is None:
+            first_id = row_id
+        if row_id != first_id:
+            continue
+        section = (row.get("Section Name") or "").strip()
+        metric = (row.get("Metric Name") or "").strip()
+        value = (row.get("Metric Value") or "").strip()
+        if not value:
+            continue
+        if section == "Occupancy" and metric == "Achieved Occupancy" and occupancy is None:
+            occupancy = _parse_float(value) / 100.0
+        elif (
+            section == "Launch Statistics"
+            and metric == "Registers Per Thread"
+            and regs_per_thread is None
+        ):
+            regs_per_thread = int(_parse_float(value))
+
+    return NsightMetrics(
+        occupancy=occupancy,
+        regs_per_thread=regs_per_thread,
+        raw_csv=csv_text,
+    )
+
+
+def _find_csv_header(csv_text: str) -> int | None:
+    marker = '"ID","Process ID"'
+    index = csv_text.find(marker)
+    return index if index >= 0 else None
+
+
+def _parse_float(value: str) -> float:
+    return float(value.replace(",", ""))

@@ -224,3 +224,82 @@ def test_local_gpu_runner_benchmark_kernel_reports_child_failure(monkeypatch) ->
 
     assert result.ok is False
     assert result.stderr == "benchmark boom\nparent err"
+
+
+def test_profile_returns_unavailable_metrics_when_ncu_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=".test_artifacts/gpu"))
+
+    metrics = runner.profile(Path("/tmp/kernel.so"), inputs=[])
+
+    assert metrics.occupancy is None
+    assert metrics.regs_per_thread is None
+    assert metrics.uncoalesced_global_loads_pct is None
+    assert metrics.spill_bytes == 0
+    assert metrics.achieved_bandwidth_gbps is None
+    assert metrics.achieved_tflops is None
+    assert metrics.raw_csv == "ncu_not_available"
+
+
+def test_profile_invokes_ncu_and_parses_stdout(monkeypatch, tmp_path) -> None:
+    fixture_csv = (
+        '"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream",'
+        '"Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit",'
+        '"Metric Value","Rule Name","Rule Type","Rule Description",'
+        '"Estimated Speedup Type","Estimated Speedup"\n'
+        '"0","1","p","h","k","1","7","(256,1,1)","(4,1,1)","0","8.0","Occupancy",'
+        '"Achieved Occupancy","%","80.00","","","","",""\n'
+        '"0","1","p","h","k","1","7","(256,1,1)","(4,1,1)","0","8.0","Launch Statistics",'
+        '"Registers Per Thread","register/thread","24","","","","",""\n'
+    )
+    captured_cmd: list[list[str]] = []
+
+    def fake_which(name):
+        return "/usr/local/cuda/bin/ncu" if name == "ncu" else None
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        captured_cmd.append(list(cmd))
+        return SimpleNamespace(returncode=0, stdout=fixture_csv, stderr="")
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    so_path = tmp_path / "kernel.so"
+    so_path.write_bytes(b"")
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=str(tmp_path)))
+
+    metrics = runner.profile(so_path, inputs=[1, 2, 3])
+
+    assert abs(metrics.occupancy - 0.80) < 1e-6
+    assert metrics.regs_per_thread == 24
+    assert metrics.raw_csv == fixture_csv
+    assert captured_cmd, "expected ncu subprocess to be invoked"
+    cmd = captured_cmd[0]
+    assert cmd[0] == "/usr/local/cuda/bin/ncu"
+    assert "--csv" in cmd
+    assert "--set" in cmd and "basic" in cmd
+    assert "--target-processes" in cmd and "all" in cmd
+    assert str(so_path) in cmd
+
+
+def test_profile_returns_unavailable_metrics_when_ncu_subprocess_fails(
+    monkeypatch, tmp_path
+) -> None:
+    def fake_which(name):
+        return "/usr/local/cuda/bin/ncu" if name == "ncu" else None
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        return SimpleNamespace(returncode=2, stdout="", stderr="ERR_NVGPUCTRPERM")
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    so_path = tmp_path / "kernel.so"
+    so_path.write_bytes(b"")
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=str(tmp_path)))
+
+    metrics = runner.profile(so_path, inputs=[])
+
+    assert metrics.occupancy is None
+    assert metrics.regs_per_thread is None
+    assert "ERR_NVGPUCTRPERM" in metrics.raw_csv
