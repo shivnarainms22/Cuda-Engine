@@ -58,11 +58,11 @@ torch::Tensor forward(torch::Tensor x, torch::Tensor y) {
     return out;
 }
 
-TORCH_LIBRARY(cuda_engine_profile, m) {
+TORCH_LIBRARY(cuda_engine, m) {
     m.def("forward(Tensor x, Tensor y) -> Tensor");
 }
 
-TORCH_LIBRARY_IMPL(cuda_engine_profile, CUDA, m) {
+TORCH_LIBRARY_IMPL(cuda_engine, CUDA, m) {
     m.impl("forward", &forward);
 }
 '''
