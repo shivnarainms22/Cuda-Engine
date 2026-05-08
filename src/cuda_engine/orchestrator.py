@@ -263,10 +263,6 @@ class _TracingLLMClient(LLMClient):
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        # Stamp the actual model name used onto the response so _model_summary
-        # reflects which model was invoked (mocks return model="mock" by default).
-        if response.model != model:
-            response = response.model_copy(update={"model": model})
         self.responses.append(response)
         return response
 

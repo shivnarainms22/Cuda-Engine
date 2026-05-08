@@ -262,7 +262,7 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
     def _fail_compile_response() -> LLMResponse:
         return LLMResponse(
             text="```cuda\nbroken\n```",
-            model="mock",
+            model="claude-sonnet-4-6",
             tool_calls=[
                 {"name": "compile_kernel", "input": {"src": "broken", "target_arch": "sm_80"}}
             ],
@@ -271,7 +271,7 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
     def _ok_compile_response() -> LLMResponse:
         return LLMResponse(
             text="```cuda\ngood\n```",
-            model="mock",
+            model="claude-opus-4-7",
             tool_calls=[
                 {"name": "compile_kernel", "input": {"src": "good", "target_arch": "sm_80"}}
             ],
