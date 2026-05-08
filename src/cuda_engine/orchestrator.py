@@ -57,6 +57,7 @@ class Orchestrator:
                 reference=reference,
                 target_arch=target,
                 run_id=run_id,
+                model=self.cfg.sonnet_model,
             ),
         )
         artifact = _run_traced_stage(
@@ -66,6 +67,7 @@ class Orchestrator:
             lambda: Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
                 spec=spec,
                 run_id=run_id,
+                model=self.cfg.sonnet_model,
                 retry_budget=self.cfg.retry_budgets.codegen,
             ),
         )
@@ -100,6 +102,7 @@ class Orchestrator:
                 return Stage2Codegen(llm=llm, gpu=self.gpu, store=self.store).run(
                     spec=spec,
                     run_id=run_id,
+                    model=self.cfg.sonnet_model,
                     retry_budget=self.cfg.retry_budgets.codegen,
                     repair_context=correctness_report,
                     artifact_prefix=f"{repair_prefix}/codegen",
@@ -168,6 +171,7 @@ class Orchestrator:
                 performance=performance,
                 reference=reference,
                 run_id=run_id,
+                model=self.cfg.sonnet_model,
                 correctness_shapes=self.cfg.correctness_shapes,
             ),
         )
