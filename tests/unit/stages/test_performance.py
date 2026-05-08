@@ -8,10 +8,12 @@ from cuda_engine.models import (
     PrecisionTolerance,
     TensorArg,
 )
-from cuda_engine.services.gpu.base import BenchmarkResult
+from cuda_engine.services.gpu.base import BenchmarkResult, CompileResult, NsightMetrics
 from cuda_engine.services.gpu.mocks import MockGPURunner
+from cuda_engine.services.llm.base import LLMResponse
+from cuda_engine.services.llm.mocks import MockLLMClient
 from cuda_engine.services.store.mocks import InMemoryStore
-from cuda_engine.stages.performance import Stage4Performance
+from cuda_engine.stages.performance import Stage4Performance, _format_perf_hints
 
 
 def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
@@ -30,7 +32,7 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
     )
     stage = Stage4Performance(gpu=gpu, store=store)
 
-    report = stage.run(
+    report, returned_artifact = stage.run(
         spec=_spec(),
         artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=Path("kernel.so")),
         run_id="run123",
@@ -40,6 +42,7 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
     assert report.speedup_vs_torch_compile == 4.0
     assert report.achieved_gbps == 512.0
     assert report.below_target is False
+    assert returned_artifact.kernel_so_path == Path("kernel.so")
     assert b'"speedup_vs_reference": 4.0' in store._files[("run123", "stage4_performance/report.json")]
     assert b'"warmup_iterations": 10' in store._files[("run123", "stage4_performance/benchmark.json")]
     assert b'"timed_iterations": 100' in store._files[("run123", "stage4_performance/benchmark.json")]
@@ -110,7 +113,7 @@ def test_stage4_performance_reports_missing_shared_object() -> None:
     store = InMemoryStore()
     stage = Stage4Performance(gpu=MockGPURunner(), store=store)
 
-    report = stage.run(
+    report, _ = stage.run(
         spec=_spec(),
         artifact=KernelArtifact(kernel_cu_path=Path("kernel.cu"), kernel_so_path=None),
         run_id="run123",
@@ -145,3 +148,168 @@ def _matrix_spec() -> KernelSpec:
         precision_tolerance=PrecisionTolerance(rtol=1e-5, atol=1e-6),
         optimization_priority=OptimizationPriority.THROUGHPUT,
     )
+
+
+def _initial_artifact_in_store(store: InMemoryStore, run_id: str, src: str) -> KernelArtifact:
+    cu = store.write_text(run_id, "stage2_codegen/final/kernel.cu", src)
+    so = store.write_bytes(run_id, "stage2_codegen/final/kernel.so", b"initial")
+    return KernelArtifact(kernel_cu_path=cu, kernel_so_path=so, compile_log="ok")
+
+
+def _llm_compile_response(src: str) -> LLMResponse:
+    return LLMResponse(
+        text=f"```cuda\n{src}\n```",
+        model="claude-sonnet-4-6",
+        tool_calls=[
+            {"name": "compile_kernel", "input": {"src": src, "target_arch": "sm_80"}}
+        ],
+        tokens_in=100,
+        tokens_out=200,
+    )
+
+
+def test_stage4_performance_retries_until_target_met() -> None:
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial slow kernel")
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok", ptx_size_bytes=1024),
+        ],
+        benchmark_results=[
+            BenchmarkResult(
+                ok=True, custom_ms=4.0, baseline_ms=2.0,
+                warmup_iterations=10, timed_iterations=50,
+            ),
+            BenchmarkResult(
+                ok=True, custom_ms=1.0, baseline_ms=2.0, achieved_gbps=300.0,
+                warmup_iterations=10, timed_iterations=50,
+            ),
+        ],
+        profile_results=[NsightMetrics(occupancy=0.45, regs_per_thread=80)],
+    )
+    llm = MockLLMClient([_llm_compile_response("// faster kernel")])
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, final_artifact = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3
+    )
+
+    assert report.below_target is False
+    assert report.speedup_vs_torch_compile == 2.0
+    assert report.warnings == []
+    assert any("attempt 1: speedup 0.500 -> 2.000" in note for note in report.notes)
+    assert final_artifact.kernel_cu_path != artifact.kernel_cu_path
+    assert llm.call_count == 1
+
+
+def test_stage4_performance_soft_fails_after_exhausted_retry_budget() -> None:
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    benchmark_below = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v3.so"), log="ok"),
+        ],
+        benchmark_results=[benchmark_below, benchmark_below, benchmark_below],
+        profile_results=[
+            NsightMetrics(occupancy=0.4, regs_per_thread=72),
+            NsightMetrics(occupancy=0.4, regs_per_thread=72),
+        ],
+    )
+    llm = MockLLMClient(
+        [
+            _llm_compile_response("// candidate v2"),
+            _llm_compile_response("// candidate v3"),
+        ]
+    )
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _ = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=2)
+
+    assert report.below_target is True
+    assert report.speedup_vs_torch_compile == 0.5
+    assert any("budget exhausted" in w for w in report.warnings)
+
+
+def test_stage4_performance_records_failed_compile_in_warnings_and_continues() -> None:
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=False, log="compile failed", errors=["nvcc: error"]),
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+        ],
+        benchmark_results=[
+            BenchmarkResult(ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50),
+            BenchmarkResult(ok=True, custom_ms=1.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50),
+        ],
+        profile_results=[
+            NsightMetrics(occupancy=0.4, regs_per_thread=72),
+            NsightMetrics(occupancy=0.4, regs_per_thread=72),
+        ],
+    )
+    llm = MockLLMClient(
+        [
+            _llm_compile_response("// bad candidate"),
+            _llm_compile_response("// good candidate"),
+        ]
+    )
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _ = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3)
+
+    assert report.below_target is False
+    assert report.speedup_vs_torch_compile == 2.0
+    assert any("attempt 1: compile failed" in w for w in report.warnings)
+
+
+def test_stage4_performance_skips_retry_when_initial_speedup_meets_target() -> None:
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    gpu = MockGPURunner(
+        benchmark_results=[
+            BenchmarkResult(ok=True, custom_ms=0.5, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50),
+        ],
+    )
+    llm = MockLLMClient([])
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, returned = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3)
+
+    assert report.below_target is False
+    assert report.speedup_vs_torch_compile == 4.0
+    assert llm.call_count == 0
+    assert returned is artifact
+
+
+def test_format_perf_hints_flags_register_pressure_and_low_occupancy() -> None:
+    metrics = NsightMetrics(occupancy=0.4, regs_per_thread=80, spill_bytes=64)
+    benchmark = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+
+    hints = _format_perf_hints(metrics, benchmark=benchmark)
+
+    assert any("Register pressure" in h for h in hints)
+    assert any("occupancy" in h.lower() for h in hints)
+    assert any("Spill bytes" in h for h in hints)
+    assert any("slower than the eager baseline" in h for h in hints)
+
+
+def test_format_perf_hints_falls_back_when_no_metrics_flag_anything() -> None:
+    metrics = NsightMetrics(occupancy=0.9, regs_per_thread=32)
+    benchmark = BenchmarkResult(
+        ok=True, custom_ms=1.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+
+    hints = _format_perf_hints(metrics, benchmark=benchmark)
+
+    assert len(hints) == 1
+    assert "No specific bottleneck" in hints[0]

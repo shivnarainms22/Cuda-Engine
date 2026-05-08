@@ -2,11 +2,15 @@ from typing import Any
 
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import KernelArtifact, KernelSpec, PerformanceReport
-from cuda_engine.services.gpu.base import BenchmarkResult, GPURunner
+from cuda_engine.prompts import load_prompt
+from cuda_engine.services.gpu.base import BenchmarkResult, GPURunner, NsightMetrics
 from cuda_engine.services.llm.base import LLMClient
+from cuda_engine.services.llm.tools import COMPILE_KERNEL
 from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.base import Stage
+from cuda_engine.stages.codegen import _source_from_response
 from cuda_engine.stages.correctness import _make_inputs
+from cuda_engine.stages.polish import _read_artifact_source
 
 
 class Stage4Performance(Stage):
@@ -29,7 +33,7 @@ class Stage4Performance(Stage):
         artifact: KernelArtifact,
         run_id: str,
         retry_budget: int = 3,
-    ) -> PerformanceReport:
+    ) -> tuple[PerformanceReport, KernelArtifact]:
         if self.gpu is None or self.store is None:
             raise RuntimeError("Stage4Performance requires gpu and store services")
         if artifact.kernel_so_path is None:
@@ -40,7 +44,7 @@ class Stage4Performance(Stage):
                 notes=["kernel_so_path is required for performance benchmarking"],
             )
             _write_report(self.store, run_id, report)
-            return report
+            return report, artifact
 
         benchmark_shape = _benchmark_shape(spec, total_elements=self.cfg.performance_shape_n)
         inputs = _make_inputs(spec, shape=benchmark_shape)
@@ -64,17 +68,181 @@ class Stage4Performance(Stage):
                 notes=[benchmark.stderr or "benchmark failed"],
             )
             _write_report(self.store, run_id, report)
-            return report
+            return report, artifact
 
         speedup = _speedup(baseline_ms=benchmark.baseline_ms, custom_ms=benchmark.custom_ms)
+        target = self.cfg.perf_target_speedup_vs_torch_compile
+        warnings: list[str] = []
+        notes: list[str] = []
+
+        current_artifact = artifact
+        current_benchmark = benchmark
+        current_speedup = speedup
+
+        if current_speedup < target and self.llm is not None and retry_budget > 0:
+            current_artifact, current_benchmark, current_speedup, warnings, notes = self._retry_loop(
+                spec=spec,
+                artifact=current_artifact,
+                benchmark=current_benchmark,
+                speedup=current_speedup,
+                target=target,
+                inputs=inputs,
+                run_id=run_id,
+                retry_budget=retry_budget,
+            )
+
         report = PerformanceReport(
-            speedup_vs_reference=speedup,
-            speedup_vs_torch_compile=speedup,
-            achieved_gbps=benchmark.achieved_gbps,
-            below_target=speedup < 1.0,
+            speedup_vs_reference=current_speedup,
+            speedup_vs_torch_compile=current_speedup,
+            achieved_gbps=current_benchmark.achieved_gbps,
+            below_target=current_speedup < target,
+            warnings=warnings,
+            notes=notes,
         )
         _write_report(self.store, run_id, report)
-        return report
+        return report, current_artifact
+
+    def _retry_loop(
+        self,
+        *,
+        spec: KernelSpec,
+        artifact: KernelArtifact,
+        benchmark: BenchmarkResult,
+        speedup: float,
+        target: float,
+        inputs: list[Any],
+        run_id: str,
+        retry_budget: int,
+    ) -> tuple[KernelArtifact, BenchmarkResult, float, list[str], list[str]]:
+        assert self.llm is not None
+        assert self.gpu is not None
+        assert self.store is not None
+
+        warnings: list[str] = []
+        notes: list[str] = []
+        current_artifact = artifact
+        current_benchmark = benchmark
+        current_speedup = speedup
+        system = [
+            {
+                "type": "text",
+                "text": load_prompt("perf_fix"),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        for attempt in range(1, retry_budget + 1):
+            if current_speedup >= target:
+                break
+
+            if current_artifact.kernel_so_path is None:
+                warnings.append(f"perf_repair attempt {attempt}: missing kernel_so_path")
+                break
+
+            metrics = self.gpu.profile(current_artifact.kernel_so_path, inputs)
+            hints = _format_perf_hints(metrics, benchmark=current_benchmark)
+            try:
+                src = _read_artifact_source(current_artifact, run_id, self.store)
+            except (FileNotFoundError, OSError) as exc:
+                warnings.append(f"perf_repair attempt {attempt}: source unreadable ({exc})")
+                break
+
+            attempt_dir = f"stage4_performance/perf_repair/attempt_{attempt:02d}"
+            self.store.write_json(
+                run_id,
+                f"{attempt_dir}/nsight.json",
+                metrics.model_dump(mode="json"),
+            )
+            self.store.write_json(
+                run_id,
+                f"{attempt_dir}/benchmark.json",
+                _benchmark_payload(current_benchmark, cfg=self.cfg),
+            )
+
+            user_message = _build_perf_repair_user_message(
+                spec=spec,
+                src=src,
+                benchmark=current_benchmark,
+                metrics=metrics,
+                hints=hints,
+                speedup=current_speedup,
+                target=target,
+            )
+            self.store.write_text(
+                run_id,
+                f"{attempt_dir}/prompt_to_llm.md",
+                user_message,
+            )
+
+            response = self.llm.complete(
+                system=system,
+                messages=[{"role": "user", "content": user_message}],
+                tools=[COMPILE_KERNEL],
+                model=self.cfg.sonnet_model,
+            )
+            self.store.write_text(run_id, f"{attempt_dir}/llm_response.md", response.text)
+
+            new_src = _extract_source_from_response(response)
+            if new_src is None:
+                warnings.append(f"perf_repair attempt {attempt}: LLM did not return CUDA source")
+                continue
+
+            self.store.write_text(run_id, f"{attempt_dir}/kernel.cu", new_src)
+            compile_result = self.gpu.compile(new_src, target_arch=spec.target_arch)
+            self.store.write_text(run_id, f"{attempt_dir}/compile.log", compile_result.log)
+            if not compile_result.ok or compile_result.so_path is None:
+                warnings.append(f"perf_repair attempt {attempt}: compile failed")
+                continue
+
+            persisted_so = self.store.write_bytes(
+                run_id,
+                f"{attempt_dir}/kernel.so",
+                compile_result.so_path.read_bytes()
+                if compile_result.so_path.exists()
+                else b"",
+            )
+            persisted_cu = self.store.write_text(
+                run_id,
+                f"{attempt_dir}/kernel.cu",
+                new_src,
+            )
+            candidate_so = persisted_so or compile_result.so_path
+            candidate = KernelArtifact(
+                kernel_cu_path=persisted_cu,
+                kernel_so_path=candidate_so,
+                compile_log=compile_result.log,
+                ptx_size_bytes=compile_result.ptx_size_bytes,
+            )
+            new_benchmark = self.gpu.benchmark_kernel(
+                candidate_so,
+                inputs,
+                warmup_iterations=self.cfg.benchmark_warmup_iterations,
+                timed_iterations=self.cfg.benchmark_timed_iterations,
+            )
+            self.store.write_json(
+                run_id,
+                f"{attempt_dir}/benchmark_after.json",
+                _benchmark_payload(new_benchmark, cfg=self.cfg),
+            )
+            if not new_benchmark.ok:
+                warnings.append(f"perf_repair attempt {attempt}: benchmark failed after recompile")
+                continue
+
+            new_speedup = _speedup(
+                baseline_ms=new_benchmark.baseline_ms, custom_ms=new_benchmark.custom_ms
+            )
+            notes.append(
+                f"perf_repair attempt {attempt}: speedup {current_speedup:.3f} -> {new_speedup:.3f}"
+            )
+            current_artifact = candidate
+            current_benchmark = new_benchmark
+            current_speedup = new_speedup
+
+        if current_speedup < target:
+            warnings.append(
+                f"perf retry budget exhausted: final speedup {current_speedup:.3f} below target {target:.3f}"
+            )
+        return current_artifact, current_benchmark, current_speedup, warnings, notes
 
 
 def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float:
@@ -103,3 +271,73 @@ def _benchmark_payload(benchmark: BenchmarkResult, *, cfg: SynthesisConfig) -> d
         "benchmark_timed_iterations": cfg.benchmark_timed_iterations,
     }
     return payload
+
+
+def _format_perf_hints(
+    metrics: NsightMetrics, *, benchmark: BenchmarkResult
+) -> list[str]:
+    hints: list[str] = []
+    if metrics.regs_per_thread is not None and metrics.regs_per_thread >= 64:
+        hints.append(
+            f"Register pressure is high ({metrics.regs_per_thread} regs/thread). "
+            "Above 64 regs/thread caps occupancy on A100. Reduce live registers, "
+            "split work across more blocks, or lower block size."
+        )
+    if metrics.occupancy is not None and metrics.occupancy < 0.5:
+        hints.append(
+            f"Achieved occupancy is {metrics.occupancy:.2f}. Investigate register pressure, "
+            "shared memory usage, or block-size limits."
+        )
+    if metrics.spill_bytes > 0:
+        hints.append(
+            f"Spill bytes detected: {metrics.spill_bytes}. Local memory spills indicate "
+            "register pressure beyond the file. Reduce live state."
+        )
+    if (
+        metrics.uncoalesced_global_loads_pct is not None
+        and metrics.uncoalesced_global_loads_pct > 20.0
+    ):
+        hints.append(
+            f"Uncoalesced global loads at {metrics.uncoalesced_global_loads_pct:.1f}%. "
+            "Restructure access patterns so 32 consecutive threads read 128 contiguous bytes."
+        )
+    if benchmark.baseline_ms is not None and benchmark.custom_ms > benchmark.baseline_ms:
+        hints.append(
+            f"Custom kernel ({benchmark.custom_ms:.3f}ms) is slower than the eager baseline "
+            f"({benchmark.baseline_ms:.3f}ms). The current implementation is leaving the "
+            "main bottleneck unresolved."
+        )
+    if not hints:
+        hints.append(
+            "No specific bottleneck flagged by basic Nsight metrics. Inspect the source "
+            "for redundant work, suboptimal launch geometry, or missed vectorization."
+        )
+    return hints
+
+
+def _build_perf_repair_user_message(
+    *,
+    spec: KernelSpec,
+    src: str,
+    benchmark: BenchmarkResult,
+    metrics: NsightMetrics,
+    hints: list[str],
+    speedup: float,
+    target: float,
+) -> str:
+    hints_block = "\n".join(f"- {hint}" for hint in hints)
+    return (
+        "Revise this CUDA kernel to improve performance, then call "
+        "compile_kernel(src, target_arch).\n\n"
+        f"Current speedup vs torch.compile: {speedup:.3f} (target: {target:.3f}).\n\n"
+        f"KernelSpec:\n{spec.model_dump_json(indent=2)}\n\n"
+        f"BenchmarkResult:\n{benchmark.model_dump_json(indent=2)}\n\n"
+        f"NsightMetrics:\n{metrics.model_dump_json(indent=2)}\n\n"
+        f"Suggested optimization themes:\n{hints_block}\n\n"
+        f"Current kernel.cu:\n```cuda\n{src}\n```"
+    )
+
+
+def _extract_source_from_response(response: Any) -> str | None:
+    src = _source_from_response(response.text, response.tool_calls)
+    return src or None

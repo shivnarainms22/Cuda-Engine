@@ -146,7 +146,7 @@ class Orchestrator:
             _write_result_report(self.store, result)
             return result
 
-        performance = _run_traced_stage(
+        performance, artifact = _run_traced_stage(
             stage_traces,
             llm,
             "performance",
