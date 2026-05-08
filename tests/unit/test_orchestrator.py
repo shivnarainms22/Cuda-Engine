@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from cuda_engine.config import RetryBudgets, SynthesisConfig
 from cuda_engine.orchestrator import Orchestrator
 from cuda_engine.services.gpu.base import CompileResult, RunResult
@@ -8,6 +10,7 @@ from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.llm.base import LLMResponse
 from cuda_engine.services.llm.mocks import MockLLMClient
 from cuda_engine.services.store.mocks import InMemoryStore
+from cuda_engine.stages.base import BudgetExhaustedError
 
 SPEC_JSON = """{"name":"identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["N"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["N"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
 MATRIX_SPEC_JSON = """{"name":"matrix_identity","target_arch":"sm_80","inputs":[{"name":"x","dtype":"fp32","shape":["B","D"]}],"outputs":[{"name":"out","dtype":"fp32","shape":["B","D"]}],"precision_tolerance":{"rtol":0.001,"atol":0.001},"optimization_priority":"balanced"}"""
@@ -323,9 +326,6 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
 
 def test_orchestrator_codegen_escalation_disabled_surfaces_bust() -> None:
     """With escalate_to_opus_on_bust=False, Sonnet bust propagates as Stage-3 failure."""
-    import pytest
-    from cuda_engine.stages.base import BudgetExhaustedError
-
     store = InMemoryStore()
 
     def _fail_compile_response() -> LLMResponse:
