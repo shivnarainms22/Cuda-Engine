@@ -132,6 +132,40 @@ def test_stage2_codegen_raises_when_retry_budget_exhausted() -> None:
     assert store._files[("run123", "stage2_codegen/attempt_02/compile_log.txt")] == b"last nvcc log"
 
 
+def test_stage2_codegen_escalation_context_appears_in_initial_prompt() -> None:
+    from cuda_engine.stages.base import SonnetFailureSummary
+
+    store = InMemoryStore()
+    llm = MockLLMClient([_compile_call("ok")])
+    stage = Stage2Codegen(
+        llm=llm,
+        gpu=MockGPURunner(
+            compile_results=[CompileResult(ok=True, so_path=Path("/tmp/k.so"), log="ok")]
+        ),
+        store=store,
+    )
+    summary = SonnetFailureSummary(
+        last_compile_errors="undefined symbol foo",
+        last_compile_log="error log content",
+        last_source_attempt="__global__ void bad() { foo(); }",
+        attempts_made=3,
+    )
+
+    stage.run(
+        spec=_spec(),
+        run_id="run123",
+        retry_budget=1,
+        model="claude-opus-4-7",
+        escalation_context=summary,
+    )
+
+    initial_prompt = llm.calls[0]["messages"][0]["content"]
+    assert "previous attempts" in initial_prompt.lower() or "sonnet" in initial_prompt.lower()
+    assert "undefined symbol foo" in initial_prompt
+    assert "__global__ void bad() { foo(); }" in initial_prompt
+    assert "3" in initial_prompt  # attempts_made
+
+
 def test_stage2_codegen_budget_exhausted_carries_summary() -> None:
     store = InMemoryStore()
     stage = Stage2Codegen(

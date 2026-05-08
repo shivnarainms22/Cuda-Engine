@@ -20,6 +20,7 @@ class Stage2Codegen(Stage):
         model: str,
         retry_budget: int = 3,
         repair_context: CorrectnessReport | None = None,
+        escalation_context: SonnetFailureSummary | None = None,
         artifact_prefix: str = "stage2_codegen",
     ) -> KernelArtifact:
         if self.llm is None or self.gpu is None or self.store is None:
@@ -28,7 +29,11 @@ class Stage2Codegen(Stage):
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
-                "content": _initial_user_prompt(spec=spec, repair_context=repair_context),
+                "content": _initial_user_prompt(
+                    spec=spec,
+                    repair_context=repair_context,
+                    escalation_context=escalation_context,
+                ),
             }
         ]
         system = [
@@ -137,18 +142,36 @@ def _compile_call(tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def _initial_user_prompt(*, spec: KernelSpec, repair_context: CorrectnessReport | None) -> str:
-    if repair_context is None:
-        return (
-            "Generate kernel.cu for this KernelSpec, then call compile_kernel.\n\n"
-            f"{spec.model_dump_json(indent=2)}"
+def _initial_user_prompt(
+    *,
+    spec: KernelSpec,
+    repair_context: CorrectnessReport | None,
+    escalation_context: SonnetFailureSummary | None = None,
+) -> str:
+    base = (
+        "Generate kernel.cu for this KernelSpec, then call compile_kernel.\n\n"
+        f"{spec.model_dump_json(indent=2)}"
+        if repair_context is None
+        else (
+            "Repair kernel.cu for this KernelSpec. The previous kernel compiled but failed "
+            "correctness. Use the correctness report to fix the implementation, then call "
+            "compile_kernel with the repaired CUDA source.\n\n"
+            f"KernelSpec:\n{spec.model_dump_json(indent=2)}\n\n"
+            f"Correctness report:\n{repair_context.model_dump_json(indent=2)}"
         )
+    )
+    if escalation_context is None:
+        return base
+    return f"{_escalation_preamble(escalation_context)}\n\n{base}"
+
+
+def _escalation_preamble(summary: SonnetFailureSummary) -> str:
     return (
-        "Repair kernel.cu for this KernelSpec. The previous kernel compiled but failed "
-        "correctness. Use the correctness report to fix the implementation, then call "
-        "compile_kernel with the repaired CUDA source.\n\n"
-        f"KernelSpec:\n{spec.model_dump_json(indent=2)}\n\n"
-        f"Correctness report:\n{repair_context.model_dump_json(indent=2)}"
+        f"Previous attempts with claude-sonnet-4-6 failed {summary.attempts_made} times. "
+        "Address the underlying issue rather than repeating the prior approach.\n\n"
+        f"Last compile errors:\n{summary.last_compile_errors}\n\n"
+        f"Last compile log:\n{summary.last_compile_log}\n\n"
+        f"Last source attempt:\n```cuda\n{summary.last_source_attempt}\n```"
     )
 
 
