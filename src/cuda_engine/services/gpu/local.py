@@ -296,7 +296,14 @@ class LocalGPURunner(GPURunner):
 
         if completed.returncode != 0:
             return NsightMetrics(raw_csv=completed.stderr or completed.stdout or "ncu_failed")
-        return parse_ncu_csv(completed.stdout)
+        metrics = parse_ncu_csv(completed.stdout)
+        if metrics.occupancy is None and metrics.regs_per_thread is None:
+            child_stderr = _read_child_stderr(output_path)
+            if child_stderr:
+                metrics = metrics.model_copy(
+                    update={"raw_csv": f"{child_stderr}\n---\n{metrics.raw_csv}"}
+                )
+        return metrics
 
     @staticmethod
     def _cache_key(*, src: str, target_arch: str, flags: tuple[str, ...]) -> str:
@@ -395,3 +402,16 @@ def _find_csv_header(csv_text: str) -> int | None:
 
 def _parse_float(value: str) -> float:
     return float(value.replace(",", ""))
+
+
+def _read_child_stderr(output_path: Path) -> str:
+    if not output_path.exists():
+        return ""
+    try:
+        with output_path.open("rb") as f:
+            payload = pickle.load(f)
+    except (EOFError, pickle.PickleError, OSError):
+        return ""
+    if payload.get("ok") is True:
+        return ""
+    return str(payload.get("stderr") or "").strip()

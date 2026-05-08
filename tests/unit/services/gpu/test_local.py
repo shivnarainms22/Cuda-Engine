@@ -303,3 +303,47 @@ def test_profile_returns_unavailable_metrics_when_ncu_subprocess_fails(
     assert metrics.occupancy is None
     assert metrics.regs_per_thread is None
     assert "ERR_NVGPUCTRPERM" in metrics.raw_csv
+
+
+def test_profile_surfaces_child_traceback_when_ncu_reports_no_kernels(
+    monkeypatch, tmp_path
+) -> None:
+    ncu_stdout = (
+        "==PROF== Connected to process 1\n"
+        "==PROF== Disconnected from process 1\n"
+        "==WARNING== No kernels were profiled.\n"
+    )
+    child_traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "_run_kernel_child.py", line 84, in _torch_custom_op_forward\n'
+        "    return cast(Any, torch.ops.cuda_engine.forward)\n"
+        "AttributeError: '_OpNamespace' 'cuda_engine' object has no attribute 'forward'\n"
+    )
+
+    def fake_which(name):
+        return "/usr/local/cuda/bin/ncu" if name == "ncu" else None
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        # The child wrote its failure pickle to the path passed via --output.
+        output_index = cmd.index("--output") + 1
+        output_path = Path(cmd[output_index])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as f:
+            pickle.dump(
+                {"ok": False, "outputs": None, "stdout": "", "stderr": child_traceback},
+                f,
+            )
+        return SimpleNamespace(returncode=0, stdout=ncu_stdout, stderr="")
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    so_path = tmp_path / "kernel.so"
+    so_path.write_bytes(b"")
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=str(tmp_path)))
+
+    metrics = runner.profile(so_path, inputs=[])
+
+    assert metrics.occupancy is None
+    assert "AttributeError" in metrics.raw_csv
+    assert "No kernels were profiled" in metrics.raw_csv
