@@ -1,4 +1,6 @@
+import csv
 import hashlib
+import io
 import pickle
 import shutil
 import subprocess
@@ -253,6 +255,52 @@ class LocalGPURunner(GPURunner):
 
     def profile(self, so_path: Path, inputs: list[Any]) -> NsightMetrics:
         raise NotImplementedError("LocalGPURunner lands in M1")
+
+
+def parse_ncu_csv(csv_text: str) -> NsightMetrics:
+    header_index = _find_csv_header(csv_text)
+    if header_index is None:
+        return NsightMetrics(raw_csv=csv_text)
+
+    reader = csv.DictReader(io.StringIO(csv_text[header_index:]))
+    occupancy: float | None = None
+    regs_per_thread: int | None = None
+    first_id: str | None = None
+    for row in reader:
+        row_id = row.get("ID", "")
+        if first_id is None:
+            first_id = row_id
+        if row_id != first_id:
+            continue
+        section = (row.get("Section Name") or "").strip()
+        metric = (row.get("Metric Name") or "").strip()
+        value = (row.get("Metric Value") or "").strip()
+        if not value:
+            continue
+        if section == "Occupancy" and metric == "Achieved Occupancy" and occupancy is None:
+            occupancy = _parse_float(value) / 100.0
+        elif (
+            section == "Launch Statistics"
+            and metric == "Registers Per Thread"
+            and regs_per_thread is None
+        ):
+            regs_per_thread = int(_parse_float(value))
+
+    return NsightMetrics(
+        occupancy=occupancy,
+        regs_per_thread=regs_per_thread,
+        raw_csv=csv_text,
+    )
+
+
+def _find_csv_header(csv_text: str) -> int | None:
+    marker = '"ID","Process ID"'
+    index = csv_text.find(marker)
+    return index if index >= 0 else None
+
+
+def _parse_float(value: str) -> float:
+    return float(value.replace(",", ""))
 
     @staticmethod
     def _cache_key(*, src: str, target_arch: str, flags: tuple[str, ...]) -> str:
