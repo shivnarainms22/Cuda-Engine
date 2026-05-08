@@ -5,7 +5,7 @@ import pytest
 
 from cuda_engine.config import RetryBudgets, SynthesisConfig
 from cuda_engine.orchestrator import Orchestrator
-from cuda_engine.services.gpu.base import CompileResult, RunResult
+from cuda_engine.services.gpu.base import BenchmarkResult, CompileResult, NsightMetrics, RunResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.llm.base import LLMResponse
 from cuda_engine.services.llm.mocks import MockLLMClient
@@ -360,3 +360,75 @@ def test_orchestrator_codegen_escalation_disabled_surfaces_bust() -> None:
 
     with pytest.raises(BudgetExhaustedError):
         orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+
+def test_orchestrator_perf_stage_escalates_to_opus() -> None:
+    """End-to-end through Orchestrator: perf below target on Sonnet → Opus iteration runs."""
+    torch = __import__("torch")
+    store = InMemoryStore()
+
+    def _perf_fix_response(src: str, model: str) -> LLMResponse:
+        return LLMResponse(
+            text=f"```cuda\n{src}\n```",
+            model=model,
+            tool_calls=[
+                {"name": "compile_kernel", "input": {"src": src, "target_arch": "sm_80"}}
+            ],
+        )
+
+    orchestrator = Orchestrator(
+        llm=MockLLMClient(
+            responses=[
+                SPEC_JSON,                                             # interview
+                LLMResponse(                                           # codegen
+                    text="```cuda\ninitial kernel\n```",
+                    model="claude-sonnet-4-6",
+                    tool_calls=[{"name": "compile_kernel", "input": {"src": "initial kernel", "target_arch": "sm_80"}}],
+                ),
+                _perf_fix_response("// sonnet perf fix", "claude-sonnet-4-6"),  # perf retry sonnet
+                _perf_fix_response("// opus perf fix", "claude-opus-4-7"),      # perf retry opus
+                "```cuda\n// annotated\ninitial kernel\n```",                   # polish
+            ]
+        ),
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),   # codegen
+                CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),       # sonnet perf retry
+                CompileResult(ok=True, so_path=Path("/tmp/v3.so"), log="ok"),       # opus perf retry
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),   # polish recompile
+            ],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in SHAPE_SIZES
+            ],
+            benchmark_results=[
+                # initial benchmark → below target (custom_ms > baseline_ms)
+                BenchmarkResult(ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=2, timed_iterations=3),
+                # sonnet perf retry after-recompile → still below target
+                BenchmarkResult(ok=True, custom_ms=3.0, baseline_ms=2.0, warmup_iterations=2, timed_iterations=3),
+                # opus perf retry after-recompile → above target
+                BenchmarkResult(ok=True, custom_ms=0.5, baseline_ms=2.0, achieved_gbps=400.0, warmup_iterations=2, timed_iterations=3),
+            ],
+            profile_results=[
+                NsightMetrics(occupancy=0.4, regs_per_thread=72),   # sonnet profile
+                NsightMetrics(occupancy=0.4, regs_per_thread=72),   # opus profile
+            ],
+        ),
+        store=store,
+        cfg=SynthesisConfig(
+            retry_budgets=RetryBudgets(performance=1),
+            opus_retry_budget_performance=1,
+            escalate_to_opus_on_bust=True,
+            performance_shape_n=256,
+            benchmark_warmup_iterations=2,
+            benchmark_timed_iterations=3,
+        ),
+    )
+
+    result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+    assert result.passed is True
+    perf_trace = next(t for t in result.report.stage_traces if t.stage_name == "performance")
+    # Both models appear in model_used
+    assert "claude-sonnet-4-6" in perf_trace.model_used
+    assert "claude-opus-4-7" in perf_trace.model_used

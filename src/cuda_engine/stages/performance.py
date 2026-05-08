@@ -93,6 +93,36 @@ class Stage4Performance(Stage):
                 attempt_offset=0,
             )
 
+        if (
+            current_speedup < target
+            and self.cfg.escalate_to_opus_on_bust
+            and self.cfg.opus_retry_budget_performance > 0
+            and self.llm is not None
+        ):
+            notes.append(
+                f"escalated to opus after sonnet retry budget exhausted at speedup {current_speedup:.3f}"
+            )
+            (
+                current_artifact,
+                current_benchmark,
+                current_speedup,
+                opus_warnings,
+                opus_notes,
+            ) = self._retry_loop(
+                spec=spec,
+                artifact=current_artifact,
+                benchmark=current_benchmark,
+                speedup=current_speedup,
+                target=target,
+                inputs=inputs,
+                run_id=run_id,
+                retry_budget=self.cfg.opus_retry_budget_performance,
+                model=self.cfg.opus_model,
+                attempt_offset=retry_budget,
+            )
+            warnings.extend(opus_warnings)
+            notes.extend(opus_notes)
+
         report = PerformanceReport(
             speedup_vs_reference=current_speedup,
             speedup_vs_torch_compile=current_speedup,
