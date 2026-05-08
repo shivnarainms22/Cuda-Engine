@@ -7,7 +7,7 @@ from cuda_engine.services.store.base import ArtifactStore
 
 @dataclass(frozen=True)
 class SonnetFailureSummary:
-    """Captures Sonnet's final failed-attempt state for handoff to Opus."""
+    """Captures a codegen stage's final failed-attempt state for handoff to an escalation model."""
 
     last_compile_errors: str
     last_compile_log: str

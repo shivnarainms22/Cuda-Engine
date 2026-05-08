@@ -160,10 +160,36 @@ def test_stage2_codegen_escalation_context_appears_in_initial_prompt() -> None:
     )
 
     initial_prompt = llm.calls[0]["messages"][0]["content"]
-    assert "previous attempts" in initial_prompt.lower() or "sonnet" in initial_prompt.lower()
+    assert "compile attempts failed" in initial_prompt.lower()
+    assert "previous 3 compile attempts" in initial_prompt.lower()
     assert "undefined symbol foo" in initial_prompt
     assert "__global__ void bad() { foo(); }" in initial_prompt
-    assert "3" in initial_prompt  # attempts_made
+
+
+def test_stage2_codegen_budget_exhausted_last_source_reflects_compile_src() -> None:
+    """last_source_attempt must equal compile_src (tool-call src), not the regex extraction."""
+    store = InMemoryStore()
+    # Construct responses where tool-call src ("X") differs from regex extraction ("Y")
+    divergent_response = LLMResponse(
+        text="```cuda\nY\n```",
+        model="mock",
+        tool_calls=[{"name": "compile_kernel", "input": {"src": "X", "target_arch": "sm_80"}}],
+    )
+    stage = Stage2Codegen(
+        llm=MockLLMClient([divergent_response]),
+        gpu=MockGPURunner(
+            compile_results=[CompileResult(ok=False, log="log-x", errors=["err-x"])]
+        ),
+        store=store,
+    )
+
+    with pytest.raises(BudgetExhaustedError) as exc_info:
+        stage.run(spec=_spec(), run_id="run123", retry_budget=1, model="claude-sonnet-4-6")
+
+    summary = exc_info.value.summary
+    assert summary is not None
+    # Must track what hit nvcc (tool-call src "X"), not the regex fallback ("Y")
+    assert summary.last_source_attempt == "X"
 
 
 def test_stage2_codegen_budget_exhausted_carries_summary() -> None:

@@ -59,7 +59,6 @@ class Stage2Codegen(Stage):
                 model=model,
             )
             src = _source_from_response(response.text, response.tool_calls)
-            last_src = src
             attempt_dir = f"{artifact_prefix}/attempt_{attempt:02d}"
             kernel_path = self.store.write_text(run_id, f"{attempt_dir}/kernel.cu", src)
             self.store.write_text(run_id, f"{attempt_dir}/llm_response.md", response.text)
@@ -76,6 +75,7 @@ class Stage2Codegen(Stage):
 
             compile_input = compile_call.get("input", {})
             compile_src = str(compile_input.get("src") or src)
+            last_src = compile_src
             target_arch = str(compile_input.get("target_arch") or spec.target_arch)
             extra_flags = tuple(str(flag) for flag in compile_input.get("extra_flags", ()))
             last_result = self.gpu.compile(
@@ -167,7 +167,7 @@ def _initial_user_prompt(
 
 def _escalation_preamble(summary: SonnetFailureSummary) -> str:
     return (
-        f"Previous attempts with claude-sonnet-4-6 failed {summary.attempts_made} times. "
+        f"Previous {summary.attempts_made} compile attempts failed. "
         "Address the underlying issue rather than repeating the prior approach.\n\n"
         f"Last compile errors:\n{summary.last_compile_errors}\n\n"
         f"Last compile log:\n{summary.last_compile_log}\n\n"
