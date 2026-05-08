@@ -313,3 +313,49 @@ def test_format_perf_hints_falls_back_when_no_metrics_flag_anything() -> None:
 
     assert len(hints) == 1
     assert "No specific bottleneck" in hints[0]
+
+
+def test_perf_retry_loop_uses_model_and_offset(tmp_path: Path) -> None:
+    """_retry_loop should send the given model to LLM and number attempts after the offset."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial slow kernel")
+    benchmark_below = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    benchmark_above = BenchmarkResult(
+        ok=True, custom_ms=0.5, baseline_ms=2.0, achieved_gbps=300.0,
+        warmup_iterations=10, timed_iterations=50,
+    )
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok", ptx_size_bytes=1024),
+        ],
+        benchmark_results=[benchmark_above],
+        profile_results=[NsightMetrics(occupancy=0.45, regs_per_thread=80)],
+    )
+    llm = MockLLMClient([_llm_compile_response("// faster kernel")])
+    cfg = SynthesisConfig(
+        perf_target_speedup_vs_torch_compile=1.0,
+        performance_shape_n=256,
+        benchmark_warmup_iterations=2,
+        benchmark_timed_iterations=3,
+    )
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    stage._retry_loop(
+        spec=_spec(),
+        artifact=artifact,
+        benchmark=benchmark_below,
+        speedup=0.5,
+        target=1.0,
+        inputs=[],
+        run_id="run123",
+        retry_budget=1,
+        model="claude-opus-4-7",
+        attempt_offset=3,
+    )
+
+    # Model forwarded to LLM
+    assert llm.calls[-1]["model"] == "claude-opus-4-7"
+    # Artifact stored under attempt_04/ (offset 3 + local_attempt 1 = 4)
+    assert ("run123", "stage4_performance/perf_repair/attempt_04/kernel.cu") in store._files

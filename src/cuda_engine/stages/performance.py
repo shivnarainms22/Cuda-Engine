@@ -89,6 +89,8 @@ class Stage4Performance(Stage):
                 inputs=inputs,
                 run_id=run_id,
                 retry_budget=retry_budget,
+                model=self.cfg.sonnet_model,
+                attempt_offset=0,
             )
 
         report = PerformanceReport(
@@ -113,6 +115,8 @@ class Stage4Performance(Stage):
         inputs: list[Any],
         run_id: str,
         retry_budget: int,
+        model: str,
+        attempt_offset: int = 0,
     ) -> tuple[KernelArtifact, BenchmarkResult, float, list[str], list[str]]:
         assert self.llm is not None
         assert self.gpu is not None
@@ -131,7 +135,8 @@ class Stage4Performance(Stage):
             }
         ]
 
-        for attempt in range(1, retry_budget + 1):
+        for local_attempt in range(1, retry_budget + 1):
+            attempt = local_attempt + attempt_offset
             if current_speedup >= target:
                 break
 
@@ -178,7 +183,7 @@ class Stage4Performance(Stage):
                 system=system,
                 messages=[{"role": "user", "content": user_message}],
                 tools=[COMPILE_KERNEL],
-                model=self.cfg.sonnet_model,
+                model=model,
             )
             self.store.write_text(run_id, f"{attempt_dir}/llm_response.md", response.text)
 
