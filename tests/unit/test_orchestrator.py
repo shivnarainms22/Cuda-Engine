@@ -319,3 +319,44 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
         key for key in store._files if "stage2_codegen/escalated/attempt_01/" in key[1]
     ]
     assert escalated_files, f"expected escalated/ files, got: {list(store._files.keys())[:20]}"
+
+
+def test_orchestrator_codegen_escalation_disabled_surfaces_bust() -> None:
+    """With escalate_to_opus_on_bust=False, Sonnet bust propagates as Stage-3 failure."""
+    import pytest
+    from cuda_engine.stages.base import BudgetExhaustedError
+
+    store = InMemoryStore()
+
+    def _fail_compile_response() -> LLMResponse:
+        return LLMResponse(
+            text="```cuda\nbroken\n```",
+            model="mock",
+            tool_calls=[
+                {"name": "compile_kernel", "input": {"src": "broken", "target_arch": "sm_80"}}
+            ],
+        )
+
+    orchestrator = Orchestrator(
+        llm=MockLLMClient(
+            responses=[
+                SPEC_JSON,
+                _fail_compile_response(), _fail_compile_response(), _fail_compile_response(),
+            ]
+        ),
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=False, log="bad1", errors=["err1"]),
+                CompileResult(ok=False, log="bad2", errors=["err2"]),
+                CompileResult(ok=False, log="bad3", errors=["err3"]),
+            ],
+        ),
+        store=store,
+        cfg=SynthesisConfig(
+            escalate_to_opus_on_bust=False,
+            retry_budgets=RetryBudgets(codegen=3),
+        ),
+    )
+
+    with pytest.raises(BudgetExhaustedError):
+        orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
