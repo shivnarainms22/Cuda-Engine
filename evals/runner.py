@@ -17,6 +17,7 @@ from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import SynthesisResult
 
 SynthFn = Callable[..., SynthesisResult]
+ProgressFn = Callable[[str], None]
 
 CSV_COLUMNS = [
     "kernel",
@@ -95,6 +96,10 @@ def run_eval_suite(
     baseline_dir: Path | None = None,
     target: str = "sm_80",
     config: SynthesisConfig | None = None,
+    only: set[str] | None = None,
+    limit: int | None = None,
+    resume: bool = True,
+    progress: ProgressFn | None = None,
     synthesize_fn: SynthFn = synthesize,
 ) -> EvalSummary:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -102,9 +107,24 @@ def run_eval_suite(
     kernels_dir.mkdir(parents=True, exist_ok=True)
     artifact_root = out_dir / "artifacts"
     baseline = _load_baseline(baseline_dir)
+    selected_kernels = _select_kernels(discover_kernels(suite_root), only=only)
 
     rows: list[EvalRow] = []
-    for kernel in discover_kernels(suite_root):
+    total = len(selected_kernels)
+    new_runs = 0
+    for index, kernel in enumerate(selected_kernels, start=1):
+        completed_path = kernels_dir / f"{kernel.name}.json"
+        if resume and completed_path.exists():
+            row = _row_from_json(completed_path)
+            row = _with_regression(row, baseline.get(row.kernel))
+            rows.append(row)
+            _report_progress(progress, f"[{index}/{total}] SKIP {kernel.name} (existing result)")
+            continue
+
+        if limit is not None and new_runs >= limit:
+            continue
+        new_runs += 1
+        _report_progress(progress, f"[{index}/{total}] RUN {kernel.name}")
         kernel_config = (config or SynthesisConfig()).model_copy(
             update={
                 "artifact_root": str(artifact_root / kernel.name),
@@ -119,9 +139,14 @@ def run_eval_suite(
         )
         row = _with_regression(row, baseline.get(row.kernel))
         rows.append(row)
-        (kernels_dir / f"{kernel.name}.json").write_text(
+        completed_path.write_text(
             json.dumps(_row_to_json(row), indent=2),
             encoding="utf-8",
+        )
+        _report_progress(
+            progress,
+            f"[{index}/{total}] DONE {kernel.name} passed={row.passed} "
+            f"speedup={_format_float(row.speedup_vs_torch_compile) or 'n/a'}",
         )
 
     csv_path = out_dir / "results.csv"
@@ -129,6 +154,14 @@ def run_eval_suite(
     _write_csv(csv_path, rows)
     _write_markdown(markdown_path, rows)
     return EvalSummary(rows=rows, out_dir=out_dir, csv_path=csv_path, markdown_path=markdown_path)
+
+
+def _select_kernels(
+    kernels: list[EvalKernel],
+    *,
+    only: set[str] | None,
+) -> list[EvalKernel]:
+    return [kernel for kernel in kernels if only is None or kernel.name in only]
 
 
 def _run_kernel(
@@ -292,6 +325,41 @@ def _row_to_csv(row: EvalRow) -> dict[str, str]:
 
 def _row_to_json(row: EvalRow) -> dict[str, object]:
     return asdict(row)
+
+
+def _row_from_json(path: Path) -> EvalRow:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"kernel result must be a JSON object: {path}")
+    return EvalRow(
+        kernel=str(payload.get("kernel", path.stem)),
+        passed=bool(payload.get("passed", False)),
+        run_id=str(payload.get("run_id", "")),
+        failed_stage=(
+            int(payload["failed_stage"]) if payload.get("failed_stage") is not None else None
+        ),
+        failure_reason=str(payload.get("failure_reason", "")),
+        speedup_vs_torch_compile=_parse_float_or_number(payload.get("speedup_vs_torch_compile")),
+        speedup_vs_reference=_parse_float_or_number(payload.get("speedup_vs_reference")),
+        below_target=(
+            bool(payload["below_target"]) if payload.get("below_target") is not None else None
+        ),
+        artifacts_dir=str(payload.get("artifacts_dir", "")),
+        regression=str(payload.get("regression", "")),
+    )
+
+
+def _report_progress(progress: ProgressFn | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def _parse_float_or_number(value: object) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        return _parse_float(value)
+    return None
 
 
 def _parse_float(value: str | None) -> float | None:

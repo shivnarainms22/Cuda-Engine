@@ -247,7 +247,19 @@ def test_eval_command_runs_suite_and_prints_summary(tmp_path: Path, monkeypatch:
 
     result = CliRunner().invoke(
         app,
-        ["eval", "--suite", str(suite_root), "--out", str(out_dir), "--target", "sm_90"],
+        [
+            "eval",
+            "--suite",
+            str(suite_root),
+            "--out",
+            str(out_dir),
+            "--target",
+            "sm_90",
+            "--only",
+            "vector_add,clamp",
+            "--limit",
+            "2",
+        ],
     )
 
     assert result.exit_code == 0
@@ -255,6 +267,9 @@ def test_eval_command_runs_suite_and_prints_summary(tmp_path: Path, monkeypatch:
     assert calls[0]["suite_root"] == suite_root
     assert calls[0]["out_dir"] == out_dir
     assert calls[0]["target"] == "sm_90"
+    assert calls[0]["only"] == {"vector_add", "clamp"}
+    assert calls[0]["limit"] == 2
+    assert calls[0]["progress"] is not None
     assert "Eval complete: 1/1 passed" in result.stdout
     assert f"CSV: {out_dir / 'results.csv'}" in result.stdout
     assert f"Summary: {out_dir / 'summary.md'}" in result.stdout

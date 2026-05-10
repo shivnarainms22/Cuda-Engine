@@ -49,6 +49,18 @@ def eval_suite(
         typer.Option(help="Optional prior results directory."),
     ] = None,
     target: Annotated[str, typer.Option(help="CUDA target architecture.")] = "sm_80",
+    only: Annotated[
+        str | None,
+        typer.Option(help="Comma-separated kernel names to run."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(help="Maximum number of selected kernels to run."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Skip kernels with existing JSON results."),
+    ] = True,
 ) -> None:
     """Run an eval suite and write aggregate markdown/CSV results."""
     eval_runner = _load_eval_runner()
@@ -59,6 +71,10 @@ def eval_suite(
         baseline_dir=baseline,
         target=target,
         config=SynthesisConfig(),
+        only=_parse_only(only),
+        limit=limit,
+        resume=resume,
+        progress=typer.echo,
     )
     passed = sum(1 for row in summary.rows if row.passed)
     typer.echo(f"Eval complete: {passed}/{len(summary.rows)} passed")
@@ -88,6 +104,13 @@ def _load_eval_runner() -> ModuleType:
         raise ModuleNotFoundError(
             "could not import evals.runner; run this command from a cuda-engine source checkout"
         ) from exc
+
+
+def _parse_only(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    names = {item.strip() for item in value.split(",") if item.strip()}
+    return names or None
 
 
 def _print_report_summary(report_path: Path) -> None:

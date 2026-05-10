@@ -260,6 +260,125 @@ def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:
     }
 
 
+def test_run_eval_suite_reports_progress_and_skips_completed_kernels(tmp_path: Path) -> None:
+    from evals.runner import run_eval_suite
+
+    suite_root = tmp_path / "internal"
+    _kernel_dir(
+        suite_root,
+        "already_done",
+        prompt="Done.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    _kernel_dir(
+        suite_root,
+        "new_kernel",
+        prompt="New.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    out_dir = tmp_path / "results"
+    completed_dir = out_dir / "kernels"
+    completed_dir.mkdir(parents=True)
+    (completed_dir / "already_done.json").write_text(
+        json.dumps(
+            {
+                "kernel": "already_done",
+                "passed": True,
+                "run_id": "old",
+                "failed_stage": None,
+                "failure_reason": "",
+                "speedup_vs_torch_compile": 1.1,
+                "speedup_vs_reference": 1.2,
+                "below_target": False,
+                "artifacts_dir": "/old",
+                "regression": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    progress: list[str] = []
+    calls: list[str] = []
+
+    def fake_synthesize(
+        prompt: str,
+        reference: object,
+        target: str,
+        config: SynthesisConfig,
+    ) -> SynthesisResult:
+        calls.append(prompt)
+        return _result(
+            kernel_name="new_kernel",
+            passed=True,
+            run_id="new",
+            artifacts_dir="/new",
+            speedup=1.0,
+        )
+
+    summary = run_eval_suite(
+        suite_root=suite_root,
+        out_dir=out_dir,
+        limit=1,
+        progress=progress.append,
+        synthesize_fn=fake_synthesize,
+    )
+
+    assert [row.kernel for row in summary.rows] == ["already_done", "new_kernel"]
+    assert calls == ["New."]
+    assert progress == [
+        "[1/2] SKIP already_done (existing result)",
+        "[2/2] RUN new_kernel",
+        "[2/2] DONE new_kernel passed=True speedup=1.00",
+    ]
+
+
+def test_run_eval_suite_only_filters_kernel_names(tmp_path: Path) -> None:
+    from evals.runner import run_eval_suite
+
+    suite_root = tmp_path / "internal"
+    _kernel_dir(
+        suite_root,
+        "first",
+        prompt="First.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    _kernel_dir(
+        suite_root,
+        "second",
+        prompt="Second.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    calls: list[str] = []
+
+    def fake_synthesize(
+        prompt: str,
+        reference: object,
+        target: str,
+        config: SynthesisConfig,
+    ) -> SynthesisResult:
+        calls.append(prompt)
+        return _result(
+            kernel_name="second",
+            passed=True,
+            run_id="second",
+            artifacts_dir="/second",
+            speedup=1.0,
+        )
+
+    summary = run_eval_suite(
+        suite_root=suite_root,
+        out_dir=tmp_path / "results",
+        only={"second"},
+        synthesize_fn=fake_synthesize,
+    )
+
+    assert [row.kernel for row in summary.rows] == ["second"]
+    assert calls == ["Second."]
+
+
 def _kernel_dir(
     suite_root: Path,
     name: str,
