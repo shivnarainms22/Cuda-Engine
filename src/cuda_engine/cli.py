@@ -1,5 +1,8 @@
+import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Annotated, Any
 
 import typer
@@ -48,8 +51,7 @@ def eval_suite(
     target: Annotated[str, typer.Option(help="CUDA target architecture.")] = "sm_80",
 ) -> None:
     """Run an eval suite and write aggregate markdown/CSV results."""
-    from evals import runner as eval_runner
-
+    eval_runner = _load_eval_runner()
     suite_root = Path("evals") / "internal" if suite == "internal" else Path(suite)
     summary = eval_runner.run_eval_suite(
         suite_root=suite_root,
@@ -62,6 +64,30 @@ def eval_suite(
     typer.echo(f"Eval complete: {passed}/{len(summary.rows)} passed")
     typer.echo(f"CSV: {summary.csv_path}")
     typer.echo(f"Summary: {summary.markdown_path}")
+
+
+def _load_eval_runner() -> ModuleType:
+    try:
+        from evals import runner as eval_runner
+
+        return eval_runner
+    except ModuleNotFoundError as exc:
+        for root in (Path.cwd(), *Path.cwd().parents):
+            runner_path = root / "evals" / "runner.py"
+            if runner_path.exists():
+                spec = importlib.util.spec_from_file_location(
+                    "cuda_engine_source_eval_runner",
+                    runner_path,
+                )
+                if spec is None or spec.loader is None:
+                    break
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = module
+                spec.loader.exec_module(module)
+                return module
+        raise ModuleNotFoundError(
+            "could not import evals.runner; run this command from a cuda-engine source checkout"
+        ) from exc
 
 
 def _print_report_summary(report_path: Path) -> None:
