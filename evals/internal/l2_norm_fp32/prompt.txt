@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 L2 norm over the last dimension: out = sqrt(sum(x*x, dim=-1)).

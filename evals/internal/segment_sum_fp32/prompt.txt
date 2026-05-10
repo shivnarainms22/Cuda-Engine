@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 fixed segment sum with segment width 4 along the last dimension.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 sigmoid multiply: out = sigmoid(x) * y for same-shaped tensors.

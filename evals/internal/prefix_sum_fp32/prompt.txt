@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 inclusive prefix sum along the last dimension.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 vector addition: out = x + y for contiguous tensors of shape [N].

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 GEGLU-style fused multiply: out = x * gelu(gate) for same-shaped fp16 tensors.

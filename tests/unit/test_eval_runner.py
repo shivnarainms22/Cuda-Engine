@@ -15,7 +15,13 @@ def test_discover_kernels_returns_complete_kernel_dirs(tmp_path: Path) -> None:
     from evals.runner import discover_kernels
 
     suite_root = tmp_path / "internal"
-    _kernel_dir(suite_root, "vector_add", prompt="Add vectors.", reference_body="return x")
+    _kernel_dir(
+        suite_root,
+        "vector_add",
+        prompt="Add vectors.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
     incomplete = suite_root / "missing_reference"
     incomplete.mkdir(parents=True)
     (incomplete / "prompt.txt").write_text("missing reference", encoding="utf-8")
@@ -24,15 +30,98 @@ def test_discover_kernels_returns_complete_kernel_dirs(tmp_path: Path) -> None:
 
     assert [kernel.name for kernel in kernels] == ["vector_add"]
     assert kernels[0].prompt == "Add vectors."
+    assert kernels[0].correctness_shapes == ((128,), (1024,), (4097,))
     assert kernels[0].reference(3) == 3
+
+
+def test_discover_kernels_requires_shapes_and_notes(tmp_path: Path) -> None:
+    from evals.runner import discover_kernels
+
+    suite_root = tmp_path / "internal"
+    missing_shapes = _kernel_dir(
+        suite_root,
+        "missing_shapes",
+        prompt="Missing shapes.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    (missing_shapes / "shapes.yaml").unlink()
+    missing_notes = _kernel_dir(
+        suite_root,
+        "missing_notes",
+        prompt="Missing notes.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    (missing_notes / "notes.md").unlink()
+    _kernel_dir(
+        suite_root,
+        "complete",
+        prompt="Complete.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+
+    kernels = discover_kernels(suite_root)
+
+    assert [kernel.name for kernel in kernels] == ["complete"]
+
+
+def test_run_eval_suite_passes_kernel_shapes_to_config(tmp_path: Path) -> None:
+    from evals.runner import run_eval_suite
+
+    suite_root = tmp_path / "internal"
+    _kernel_dir(
+        suite_root,
+        "matrix_kernel",
+        prompt="Matrix kernel.",
+        reference_body="return x",
+        shapes=[(16, 64), (32, 128), (4, 1024)],
+    )
+    seen_shapes: list[tuple[tuple[int, ...], ...]] = []
+
+    def fake_synthesize(
+        prompt: str,
+        reference: object,
+        target: str,
+        config: SynthesisConfig,
+    ) -> SynthesisResult:
+        seen_shapes.append(config.correctness_shapes)
+        return _result(
+            kernel_name="matrix_kernel",
+            passed=True,
+            run_id="matrix",
+            artifacts_dir="/tmp/matrix",
+            speedup=1.0,
+        )
+
+    run_eval_suite(
+        suite_root=suite_root,
+        out_dir=tmp_path / "results",
+        synthesize_fn=fake_synthesize,
+    )
+
+    assert seen_shapes == [((16, 64), (32, 128), (4, 1024))]
 
 
 def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) -> None:
     from evals.runner import run_eval_suite
 
     suite_root = tmp_path / "internal"
-    _kernel_dir(suite_root, "fast_kernel", prompt="Fast kernel.", reference_body="return x + 1")
-    _kernel_dir(suite_root, "failed_kernel", prompt="Fail kernel.", reference_body="return x")
+    _kernel_dir(
+        suite_root,
+        "fast_kernel",
+        prompt="Fast kernel.",
+        reference_body="return x + 1",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    _kernel_dir(
+        suite_root,
+        "failed_kernel",
+        prompt="Fail kernel.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
     out_dir = tmp_path / "results"
     calls: list[tuple[str, str, str]] = []
 
@@ -109,8 +198,20 @@ def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:
     from evals.runner import run_eval_suite
 
     suite_root = tmp_path / "internal"
-    _kernel_dir(suite_root, "became_slow", prompt="Slow now.", reference_body="return x")
-    _kernel_dir(suite_root, "became_fail", prompt="Fail now.", reference_body="return x")
+    _kernel_dir(
+        suite_root,
+        "became_slow",
+        prompt="Slow now.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    _kernel_dir(
+        suite_root,
+        "became_fail",
+        prompt="Fail now.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
     baseline = tmp_path / "baseline"
     baseline.mkdir()
     (baseline / "results.csv").write_text(
@@ -159,7 +260,14 @@ def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:
     }
 
 
-def _kernel_dir(suite_root: Path, name: str, *, prompt: str, reference_body: str) -> Path:
+def _kernel_dir(
+    suite_root: Path,
+    name: str,
+    *,
+    prompt: str,
+    reference_body: str,
+    shapes: list[tuple[int, ...]],
+) -> Path:
     kernel_dir = suite_root / name
     kernel_dir.mkdir(parents=True)
     (kernel_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
@@ -167,7 +275,10 @@ def _kernel_dir(suite_root: Path, name: str, *, prompt: str, reference_body: str
         f"def reference(x):\n    {reference_body}\n",
         encoding="utf-8",
     )
-    (kernel_dir / "shapes.yaml").write_text("- [128]\n", encoding="utf-8")
+    shapes_text = "\n".join(
+        f"- [{', '.join(str(dim) for dim in shape)}]" for shape in shapes
+    )
+    (kernel_dir / "shapes.yaml").write_text(f"{shapes_text}\n", encoding="utf-8")
     (kernel_dir / "notes.md").write_text("test fixture\n", encoding="utf-8")
     return kernel_dir
 

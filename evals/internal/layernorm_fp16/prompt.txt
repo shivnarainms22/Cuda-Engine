@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 LayerNorm over the last dimension without affine parameters: out = (x - mean) / sqrt(var + 1e-5).

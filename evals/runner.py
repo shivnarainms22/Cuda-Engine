@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import yaml  # type: ignore[import-untyped]
+
 from cuda_engine import synthesize
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import SynthesisResult
@@ -36,6 +38,7 @@ class EvalKernel:
     root: Path
     prompt: str
     reference: Callable[..., Any]
+    correctness_shapes: tuple[tuple[int, ...], ...]
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,9 @@ def discover_kernels(suite_root: Path) -> list[EvalKernel]:
     for kernel_dir in sorted(path for path in suite_root.iterdir() if path.is_dir()):
         prompt_path = kernel_dir / "prompt.txt"
         reference_path = kernel_dir / "reference.py"
-        if not prompt_path.exists() or not reference_path.exists():
+        shapes_path = kernel_dir / "shapes.yaml"
+        notes_path = kernel_dir / "notes.md"
+        if not all(path.exists() for path in (prompt_path, reference_path, shapes_path, notes_path)):
             continue
         kernels.append(
             EvalKernel(
@@ -77,6 +82,7 @@ def discover_kernels(suite_root: Path) -> list[EvalKernel]:
                 root=kernel_dir,
                 prompt=prompt_path.read_text(encoding="utf-8").strip(),
                 reference=_load_reference(reference_path),
+                correctness_shapes=_load_shapes(shapes_path),
             )
         )
     return kernels
@@ -100,7 +106,10 @@ def run_eval_suite(
     rows: list[EvalRow] = []
     for kernel in discover_kernels(suite_root):
         kernel_config = (config or SynthesisConfig()).model_copy(
-            update={"artifact_root": str(artifact_root / kernel.name)}
+            update={
+                "artifact_root": str(artifact_root / kernel.name),
+                "correctness_shapes": kernel.correctness_shapes,
+            }
         )
         row = _run_kernel(
             kernel=kernel,
@@ -184,6 +193,27 @@ def _load_reference(reference_path: Path) -> Callable[..., Any]:
     if not callable(reference):
         raise ValueError(f"reference.py must define REFERENCE or reference(): {reference_path}")
     return cast(Callable[..., Any], reference)
+
+
+def _load_shapes(shapes_path: Path) -> tuple[tuple[int, ...], ...]:
+    raw = yaml.safe_load(shapes_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"shapes.yaml must contain a list of shapes: {shapes_path}")
+
+    shapes: list[tuple[int, ...]] = []
+    for item in raw:
+        if not isinstance(item, list) or not item:
+            raise ValueError(f"each shape must be a non-empty list of integers: {shapes_path}")
+        shape: list[int] = []
+        for dim in item:
+            if not isinstance(dim, int) or dim < 1:
+                raise ValueError(f"shape dimensions must be positive integers: {shapes_path}")
+            shape.append(dim)
+        shapes.append(tuple(shape))
+
+    if len(shapes) < 3:
+        raise ValueError(f"shapes.yaml must contain at least 3 shapes: {shapes_path}")
+    return tuple(shapes)
 
 
 def _load_baseline(baseline_dir: Path | None) -> dict[str, dict[str, str]]:

@@ -1,0 +1,1 @@
+Generate a fused fp16 LayerNorm plus SiLU kernel over the last dimension.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 top-1 over the last dimension: out = top value for each row.

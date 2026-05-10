@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 argmax over the last dimension: out = argmax(x, dim=-1) as int64 indices.

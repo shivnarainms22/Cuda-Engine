@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 scalar multiply: out = x * 2.5 for contiguous tensors of shape [N].
