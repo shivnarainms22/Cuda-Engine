@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
+
+from cuda_engine.config import SynthesisConfig
 
 app = typer.Typer(help="CUDA synthesis engine CLI.")
 
@@ -30,6 +32,36 @@ def latest_report(runs_root: Path) -> None:
         typer.echo(f"no report.json files found under: {runs_root}")
         raise typer.Exit(code=1)
     _print_report_summary(report_path)
+
+
+@app.command("eval")
+def eval_suite(
+    out: Annotated[Path, typer.Option("--out", help="Directory for aggregate eval outputs.")],
+    suite: Annotated[
+        str,
+        typer.Option(help="Suite name ('internal') or path to a suite directory."),
+    ] = "internal",
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional prior results directory."),
+    ] = None,
+    target: Annotated[str, typer.Option(help="CUDA target architecture.")] = "sm_80",
+) -> None:
+    """Run an eval suite and write aggregate markdown/CSV results."""
+    from evals import runner as eval_runner
+
+    suite_root = Path("evals") / "internal" if suite == "internal" else Path(suite)
+    summary = eval_runner.run_eval_suite(
+        suite_root=suite_root,
+        out_dir=out,
+        baseline_dir=baseline,
+        target=target,
+        config=SynthesisConfig(),
+    )
+    passed = sum(1 for row in summary.rows if row.passed)
+    typer.echo(f"Eval complete: {passed}/{len(summary.rows)} passed")
+    typer.echo(f"CSV: {summary.csv_path}")
+    typer.echo(f"Summary: {summary.markdown_path}")
 
 
 def _print_report_summary(report_path: Path) -> None:

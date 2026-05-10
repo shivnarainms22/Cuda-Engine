@@ -432,3 +432,63 @@ def test_orchestrator_perf_stage_escalates_to_opus() -> None:
     # Both models appear in model_used
     assert "claude-sonnet-4-6" in perf_trace.model_used
     assert "claude-opus-4-7" in perf_trace.model_used
+
+
+def test_orchestrator_perf_stage_skips_opus_when_escalation_disabled() -> None:
+    """End-to-end through Orchestrator: disabled escalation leaves perf below target."""
+    torch = __import__("torch")
+    store = InMemoryStore()
+
+    orchestrator = Orchestrator(
+        llm=MockLLMClient(
+            responses=[
+                SPEC_JSON,
+                LLMResponse(
+                    text="```cuda\ninitial kernel\n```",
+                    model="claude-sonnet-4-6",
+                    tool_calls=[{"name": "compile_kernel", "input": {"src": "initial kernel", "target_arch": "sm_80"}}],
+                ),
+                LLMResponse(
+                    text="```cuda\n// sonnet perf fix\n```",
+                    model="claude-sonnet-4-6",
+                    tool_calls=[{"name": "compile_kernel", "input": {"src": "// sonnet perf fix", "target_arch": "sm_80"}}],
+                ),
+                "```cuda\n// annotated\ninitial kernel\n```",
+            ]
+        ),
+        gpu=MockGPURunner(
+            compile_results=[
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),
+                CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+                CompileResult(ok=True, so_path=Path("/tmp/kernel.so"), log="ok"),
+            ],
+            run_results=[
+                RunResult(ok=True, output_tensors=[torch.arange(size, dtype=torch.float32)])
+                for size in SHAPE_SIZES
+            ],
+            benchmark_results=[
+                BenchmarkResult(ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=2, timed_iterations=3),
+                BenchmarkResult(ok=True, custom_ms=3.0, baseline_ms=2.0, warmup_iterations=2, timed_iterations=3),
+            ],
+            profile_results=[NsightMetrics(occupancy=0.4, regs_per_thread=72)],
+        ),
+        store=store,
+        cfg=SynthesisConfig(
+            retry_budgets=RetryBudgets(performance=1),
+            opus_retry_budget_performance=1,
+            escalate_to_opus_on_bust=False,
+            performance_shape_n=256,
+            benchmark_warmup_iterations=2,
+            benchmark_timed_iterations=3,
+        ),
+    )
+
+    result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
+
+    assert result.passed is True
+    assert result.performance is not None
+    assert result.performance.below_target is True
+    perf_trace = next(t for t in result.report.stage_traces if t.stage_name == "performance")
+    assert perf_trace.model_used == "claude-sonnet-4-6"
+    assert perf_trace.attempts == 1
+    assert not any("stage4_performance/perf_repair/attempt_02/" in key[1] for key in store._files)

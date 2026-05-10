@@ -6,6 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from cuda_engine.cli import app
+from evals.runner import EvalRow, EvalSummary
 
 
 def test_show_report_prints_compact_success_summary() -> None:
@@ -205,6 +206,58 @@ def test_latest_report_fails_when_no_reports_exist() -> None:
 
     assert result.exit_code == 1
     assert "no report.json files found" in result.stdout
+
+
+def test_eval_command_runs_suite_and_prints_summary(tmp_path: Path, monkeypatch: object) -> None:
+    from _pytest.monkeypatch import MonkeyPatch
+
+    typed_monkeypatch = monkeypatch
+    assert isinstance(typed_monkeypatch, MonkeyPatch)
+    suite_root = tmp_path / "internal"
+    out_dir = tmp_path / "results"
+    calls: list[dict[str, object]] = []
+
+    def fake_run_eval_suite(**kwargs: object) -> EvalSummary:
+        calls.append(kwargs)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = out_dir / "results.csv"
+        markdown_path = out_dir / "summary.md"
+        csv_path.write_text("kernel,passed\nvector_add,true\n", encoding="utf-8")
+        markdown_path.write_text("# summary\n", encoding="utf-8")
+        return EvalSummary(
+            rows=[
+                EvalRow(
+                    kernel="vector_add",
+                    passed=True,
+                    run_id="abc123",
+                    failed_stage=None,
+                    failure_reason="",
+                    speedup_vs_torch_compile=1.2,
+                    speedup_vs_reference=1.3,
+                    below_target=False,
+                    artifacts_dir="/tmp/run",
+                )
+            ],
+            out_dir=out_dir,
+            csv_path=csv_path,
+            markdown_path=markdown_path,
+        )
+
+    typed_monkeypatch.setattr("evals.runner.run_eval_suite", fake_run_eval_suite)
+
+    result = CliRunner().invoke(
+        app,
+        ["eval", "--suite", str(suite_root), "--out", str(out_dir), "--target", "sm_90"],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0]["suite_root"] == suite_root
+    assert calls[0]["out_dir"] == out_dir
+    assert calls[0]["target"] == "sm_90"
+    assert "Eval complete: 1/1 passed" in result.stdout
+    assert f"CSV: {out_dir / 'results.csv'}" in result.stdout
+    assert f"Summary: {out_dir / 'summary.md'}" in result.stdout
 
 
 def _write_report(run_dir: Path, payload: dict[str, object]) -> None:

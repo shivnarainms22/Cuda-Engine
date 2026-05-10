@@ -14,6 +14,7 @@ htmlcov/
 .tmp/
 .test_artifacts/
 runs/
+evals/results/
 *.so
 *.cubin
 *.ptx
@@ -21,3 +22,4 @@ runs/
 .idea/
 .vscode/
 .agentbridge/
+.claude/settings.local.json

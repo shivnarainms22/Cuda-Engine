@@ -1264,6 +1264,41 @@ Update `C:\Users\Shivnarain\.claude\projects\D--Cuda-Engine\memory\project_cuda_
 
 ---
 
+## Verification log
+
+### 2026-05-08 — local verification on `m3/perf-loop`
+
+Local verification evidence is recorded in `docs/milestones/M3-evidence.md`.
+
+Commands run:
+
+```text
+python -m pytest tests/unit/test_orchestrator.py::test_orchestrator_perf_stage_skips_opus_when_escalation_disabled -v
+python -m pytest -q --ignore=tests/integration
+python -m ruff check src tests
+python -m mypy src
+python -m pytest tests/integration/test_e2e_perf_loop_escalation.py --collect-only -q
+python -m pytest tests/integration/test_e2e_perf_loop_escalation.py -v
+```
+
+Local result: targeted disabled-path orchestrator test passed; non-integration suite passed; Ruff passed; mypy passed; integration test collected and skipped locally as expected.
+
+### 2026-05-10 — Colab A100 checkpoint
+
+Evidence is recorded in `docs/milestones/M3-evidence.md`.
+
+Commit tested: `1ab3da625507f1eb1223d9cdf54f79b486f8fd13` (`1ab3da6`, `m3/perf-loop`, `origin/m3/perf-loop`).
+
+Result: accepted skip. The integration test skipped with:
+
+```text
+escalation did not trigger (Sonnet hit target on first try): model_used=none
+```
+
+This matches Task 6.2's accepted variance case: the real Colab run completed the stage path and did not need perf retry or Opus escalation because the initial kernel hit the target.
+
+---
+
 ## Open questions (resolve during execution)
 
 - **Polish-stage model on escalated codegen runs.** When codegen escalates to Opus mid-run, Polish still runs on Sonnet (via `cfg.sonnet_model` in orchestrator). Acceptable for v1 — Polish is annotation-only, not optimization. If a future eval shows Polish corrupting Opus-produced kernels, revisit by passing the codegen's actual `model_used` to Polish.
