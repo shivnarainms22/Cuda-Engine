@@ -74,3 +74,12 @@ def test_internal_eval_suite_is_discoverable_and_references_import() -> None:
     assert len(kernels) == 30
     assert all(callable(kernel.reference) for kernel in kernels)
     assert all(len(kernel.correctness_shapes) >= 3 for kernel in kernels)
+
+
+def test_layernorm_silu_fixture_disambiguates_no_affine_inputs() -> None:
+    prompt = (SUITE_ROOT / "layernorm_silu_fused_fp16" / "prompt.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "exactly one input tensor x" in prompt
+    assert "Do not use affine gamma or beta" in prompt
