@@ -171,3 +171,84 @@ Performance notes from the 30-kernel console summary:
 - `below_target` from the pre-fix aggregate CSV: `4/30` (`bias_gelu_fp16`, `geglu_fp16`, `sigmoid_mul_fp16`, `tanh_add_fp32`).
 - The v1 fast_1 target (`>= 10/30`) is not met yet based on this first eval pass.
 - The M3 checkpoint still needs durable eval artifacts and specific evidence for Nsight feedback improvement and Sonnet->Opus escalation in an eval run.
+
+---
+
+## Focused Perf Triage Checkpoint
+
+Run date: 2026-05-11  
+Environment: Colab Pro + A100 with real CUDA/ncu/Anthropic path  
+Branch: `m3/perf-loop`  
+Commit tested: `79faf97` or later  
+Durable output directory: `/content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901`  
+Evidence type: Google Drive-backed eval output plus console summary supplied during Colab run.
+
+Command:
+
+```text
+cuda-engine eval \
+  --suite internal \
+  --out /content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901 \
+  --only bias_gelu_fp16,geglu_fp16,sigmoid_mul_fp16,tanh_add_fp32 \
+  --resume
+```
+
+Summary:
+
+```text
+# CUDA Engine Eval Summary
+
+Pass rate: 4/4
+
+## M3 Metrics
+
+- Pass rate: 4/4 (100.0%)
+- Median speedup vs torch.compile: 0.90x
+- P25 speedup vs torch.compile: 0.80x
+- fast_1 kernels (>1.0x): 0/4
+- Below target kernels: 3/4
+
+| Kernel | Status | Speedup vs torch.compile | Regression |
+|---|---|---:|---|
+| bias_gelu_fp16 | PASS | 0.99 |  |
+| geglu_fp16 | PASS | 1.00 |  |
+| sigmoid_mul_fp16 | PASS | 0.77 |  |
+| tanh_add_fp32 | PASS | 0.81 |  |
+```
+
+Per-kernel focused result:
+
+```text
+bias_gelu_fp16 passed=true speedup=0.9871414615408 below_target=true
+geglu_fp16 passed=true speedup=1.0 below_target=false
+sigmoid_mul_fp16 passed=true speedup=0.774570988647599 below_target=true
+tanh_add_fp32 passed=true speedup=0.8114478401527432 below_target=true
+```
+
+Nsight-backed repair evidence:
+
+```text
+bias_gelu_fp16:
+  attempt_02 improved 0.953 -> 0.955, nsight=true
+  attempt_03 improved 0.955 -> 0.9871, nsight=true
+
+geglu_fp16:
+  attempt_01 improved 0.9691 -> 1.0, nsight=true
+
+sigmoid_mul_fp16:
+  attempt_01 improved 0.7432 -> 0.7492, nsight=true
+  attempt_02 improved 0.7492 -> 0.757, nsight=true
+  attempt_04 improved 0.7267 -> 0.7746, nsight=true
+
+tanh_add_fp32:
+  attempt_01 improved 0.8098 -> 0.8302, nsight=true
+  attempt_03 improved 0.796 -> 0.8249, nsight=true
+```
+
+Interpretation:
+
+- The focused rerun is functionally green (`4/4`).
+- The M3 Nsight-feedback checkpoint is satisfied: multiple kernels show attempt-to-attempt speedup improvement with persisted `nsight.json` evidence.
+- `geglu_fp16` recovered to target in the focused rerun.
+- `bias_gelu_fp16`, `sigmoid_mul_fp16`, and `tanh_add_fp32` remain below target.
+- The full M3 `fast_1 >= 10/30` checkpoint is still open; this focused subset has `0/4` fast_1 because `geglu_fp16` landed exactly at `1.00x`, and fast_1 is strictly `>1.0x`.
