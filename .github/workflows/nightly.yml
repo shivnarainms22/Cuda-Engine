@@ -1,0 +1,58 @@
+name: Nightly A100 Eval
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  a100-eval:
+    name: Integration and internal eval on A100
+    runs-on: [self-hosted, linux, x64, a100]
+    timeout-minutes: 360
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CUDA_ENGINE_EVAL_OUT: evals/results/nightly-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify GPU tooling
+        run: |
+          nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader
+          which nvcc
+          nvcc --version
+          which ncu
+          ncu --version
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/integration -v -s --tb=short -m integration
+
+      - name: Run internal eval suite
+        run: |
+          mkdir -p "$CUDA_ENGINE_EVAL_OUT"
+          cuda-engine eval \
+            --suite internal \
+            --out "$CUDA_ENGINE_EVAL_OUT" \
+            --resume
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-engine-nightly-eval-${{ github.run_id }}
+          path: |
+            evals/results/nightly-${{ github.run_id }}/results.csv
+            evals/results/nightly-${{ github.run_id }}/summary.md
+            evals/results/nightly-${{ github.run_id }}/kernels/**/*.json
+            evals/results/nightly-${{ github.run_id }}/artifacts/**
+          if-no-files-found: warn

@@ -172,6 +172,7 @@ def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) 
         "run_id",
         "failed_stage",
         "failure_reason",
+        "failure_kind",
         "speedup_vs_torch_compile",
         "speedup_vs_reference",
         "below_target",
@@ -192,6 +193,67 @@ def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) 
     per_kernel = json.loads((out_dir / "kernels" / "fast_kernel.json").read_text(encoding="utf-8"))
     assert per_kernel["kernel"] == "fast_kernel"
     assert per_kernel["passed"] is True
+
+
+def test_run_eval_suite_classifies_external_api_failures(tmp_path: Path) -> None:
+    from evals.runner import run_eval_suite
+
+    suite_root = tmp_path / "internal"
+    _kernel_dir(
+        suite_root,
+        "credit_blocked",
+        prompt="Credit blocked.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+    _kernel_dir(
+        suite_root,
+        "stage_failed",
+        prompt="Stage failed.",
+        reference_body="return x",
+        shapes=[(128,), (1024,), (4097,)],
+    )
+
+    def fake_synthesize(
+        prompt: str,
+        reference: object,
+        target: str,
+        config: SynthesisConfig,
+    ) -> SynthesisResult:
+        if prompt == "Credit blocked.":
+            raise RuntimeError(
+                "BadRequestError: Error code: 400 - credit balance is too low "
+                "to access the Anthropic API"
+            )
+        return _result(
+            kernel_name="stage_failed",
+            passed=False,
+            run_id="stage-failed",
+            artifacts_dir="/tmp/stage-failed",
+            speedup=None,
+            failed_stage=3,
+            failure_reason="correctness check failed",
+        )
+
+    run_eval_suite(
+        suite_root=suite_root,
+        out_dir=tmp_path / "results",
+        synthesize_fn=fake_synthesize,
+    )
+
+    csv_rows = {row["kernel"]: row for row in _csv_rows(tmp_path / "results" / "results.csv")}
+    assert csv_rows["credit_blocked"]["failure_kind"] == "external_error"
+    assert csv_rows["stage_failed"]["failure_kind"] == "stage_failure"
+
+    external_json = json.loads(
+        (tmp_path / "results" / "kernels" / "credit_blocked.json").read_text(encoding="utf-8")
+    )
+    assert external_json["failure_kind"] == "external_error"
+
+    summary_md = (tmp_path / "results" / "summary.md").read_text(encoding="utf-8")
+    assert "- External/API failures: 1" in summary_md
+    assert "- Stage/kernel failures: 1" in summary_md
+    assert "| credit_blocked | FAIL |  |  | external_error |" in summary_md
 
 
 def test_run_eval_suite_summary_reports_m3_metrics(tmp_path: Path) -> None:
@@ -275,10 +337,10 @@ def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
     baseline.mkdir()
     (baseline / "results.csv").write_text(
-        "kernel,passed,run_id,failed_stage,failure_reason,speedup_vs_torch_compile,"
-        "speedup_vs_reference,below_target,artifacts_dir,regression\n"
-        "became_slow,true,old,,,1.50,1.50,false,/old,\n"
-        "became_fail,true,old,,,1.20,1.20,false,/old,\n",
+        "kernel,passed,run_id,failed_stage,failure_reason,failure_kind,"
+        "speedup_vs_torch_compile,speedup_vs_reference,below_target,artifacts_dir,regression\n"
+        "became_slow,true,old,,,,1.50,1.50,false,/old,\n"
+        "became_fail,true,old,,,,1.20,1.20,false,/old,\n",
         encoding="utf-8",
     )
 
@@ -349,6 +411,7 @@ def test_run_eval_suite_reports_progress_and_skips_completed_kernels(tmp_path: P
                 "run_id": "old",
                 "failed_stage": None,
                 "failure_reason": "",
+                "failure_kind": "",
                 "speedup_vs_torch_compile": 1.1,
                 "speedup_vs_reference": 1.2,
                 "below_target": False,

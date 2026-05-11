@@ -117,6 +117,7 @@ with csv_path.open(newline="", encoding="utf-8") as handle:
         print(
             row["kernel"],
             "passed=", row["passed"],
+            "failure_kind=", row.get("failure_kind", ""),
             "speedup=", row["speedup_vs_torch_compile"],
             "below_target=", row["below_target"],
             "artifacts=", row["artifacts_dir"],
@@ -133,6 +134,13 @@ PY
 ```
 
 For the M3 Nsight-feedback checkpoint, preserve at least one kernel where an attempt has both `benchmark.json` and `benchmark_after.json`, and the after speedup improves over the before speedup.
+
+`failure_kind` interpretation:
+
+- Empty value: passed kernel or no failure recorded.
+- `stage_failure`: the CUDA synthesis pipeline reached a stage failure, such as correctness or performance.
+- `external_error`: an external service/environment problem, such as Anthropic API credit exhaustion or rate limiting.
+- `runner_error`: an exception outside a normal stage failure that is not clearly external.
 
 ---
 
@@ -187,6 +195,34 @@ ls -lh "internal-eval-full-$EVAL_RUN_ID.zip"
 
 ---
 
+## Cell 9 - Rerun Failed-Only Kernels
+
+Use this only after inspecting `results.csv`. If a failed row already has a JSON file under `kernels/`, plain `--resume` will skip it. Use `--no-resume` when intentionally replacing failed per-kernel JSON.
+
+Example for API-credit failures after credits are restored:
+
+```bash
+source /content/cuda-engine-eval-env.sh
+cd /content/Cuda-Engine
+cuda-engine eval \
+  --suite internal \
+  --out "$OUT_DIR" \
+  --only topk_fp32,vector_add_fp32 \
+  --no-resume \
+  2>&1 | tee "$LOG_DIR/internal-eval-failed-only-$EVAL_RUN_ID.log"
+```
+
+Checkpoint immediately:
+
+```bash
+source /content/cuda-engine-eval-env.sh
+cd "$DRIVE_ROOT"
+zip -qr "internal-eval-failed-only-$EVAL_RUN_ID.zip" "$EVAL_RUN_ID" "logs/internal-eval-failed-only-$EVAL_RUN_ID.log"
+ls -lh "internal-eval-failed-only-$EVAL_RUN_ID.zip"
+```
+
+---
+
 ## Evidence To Copy Back
 
 Record these in `docs/milestones/M3-evidence.md` after the run:
@@ -194,5 +230,6 @@ Record these in `docs/milestones/M3-evidence.md` after the run:
 - Commit SHA from `git rev-parse HEAD`.
 - `summary.md` M3 metrics: pass rate, median speedup, p25 speedup, fast_1 count, below-target count.
 - Focused kernel rows from `results.csv`.
+- Any `failure_kind=external_error` rows and their exact external reason.
 - At least one `stage4_performance/perf_repair/attempt_*/benchmark.json` to `benchmark_after.json` improvement.
 - Zip filename and Drive path for durable artifacts.

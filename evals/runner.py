@@ -25,6 +25,7 @@ CSV_COLUMNS = [
     "run_id",
     "failed_stage",
     "failure_reason",
+    "failure_kind",
     "speedup_vs_torch_compile",
     "speedup_vs_reference",
     "below_target",
@@ -53,6 +54,7 @@ class EvalRow:
     speedup_vs_reference: float | None
     below_target: bool | None
     artifacts_dir: str
+    failure_kind: str = ""
     regression: str = ""
 
 
@@ -179,12 +181,14 @@ def _run_kernel(
             config=config,
         )
     except Exception as exc:  # pragma: no cover - exercised by real eval failures
+        failure_reason = f"{type(exc).__name__}: {exc}"
         return EvalRow(
             kernel=kernel.name,
             passed=False,
             run_id="",
             failed_stage=None,
-            failure_reason=f"{type(exc).__name__}: {exc}",
+            failure_reason=failure_reason,
+            failure_kind=_classify_failure(failed_stage=None, failure_reason=failure_reason),
             speedup_vs_torch_compile=None,
             speedup_vs_reference=None,
             below_target=None,
@@ -199,6 +203,10 @@ def _run_kernel(
         run_id=result.run_id,
         failed_stage=result.failed_stage,
         failure_reason=result.failure_reason or "",
+        failure_kind=_classify_failure(
+            failed_stage=result.failed_stage,
+            failure_reason=result.failure_reason or "",
+        ),
         speedup_vs_torch_compile=(
             performance.speedup_vs_torch_compile if performance is not None else None
         ),
@@ -304,14 +312,20 @@ def _write_markdown(path: Path, rows: list[EvalRow]) -> None:
         f"- fast_1 kernels (>1.0x): {metrics['fast_1']}/{metrics['total']}",
         f"- Below target kernels: {metrics['below_target']}/{metrics['total']}",
         "",
-        "| Kernel | Status | Speedup vs torch.compile | Regression |",
-        "|---|---|---:|---|",
+        "## Failure Breakdown",
+        "",
+        f"- External/API failures: {metrics['external_failures']}",
+        f"- Stage/kernel failures: {metrics['stage_failures']}",
+        f"- Runner failures: {metrics['runner_failures']}",
+        "",
+        "| Kernel | Status | Speedup vs torch.compile | Regression | Failure kind |",
+        "|---|---|---:|---|---|",
     ]
     for row in rows:
         status = "PASS" if row.passed else "FAIL"
         lines.append(
             f"| {row.kernel} | {status} | {_format_float(row.speedup_vs_torch_compile)} | "
-            f"{row.regression} |"
+            f"{row.regression} | {row.failure_kind} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -332,6 +346,9 @@ def _m3_metrics(rows: list[EvalRow]) -> dict[str, float | int | None]:
         "p25_speedup": _percentile(speedups, 25.0),
         "fast_1": sum(1 for speedup in speedups if speedup > 1.0),
         "below_target": sum(1 for row in rows if row.below_target is True),
+        "external_failures": sum(1 for row in rows if row.failure_kind == "external_error"),
+        "stage_failures": sum(1 for row in rows if row.failure_kind == "stage_failure"),
+        "runner_failures": sum(1 for row in rows if row.failure_kind == "runner_error"),
     }
 
 
@@ -361,6 +378,7 @@ def _row_to_csv(row: EvalRow) -> dict[str, str]:
         "run_id": row.run_id,
         "failed_stage": "" if row.failed_stage is None else str(row.failed_stage),
         "failure_reason": row.failure_reason,
+        "failure_kind": row.failure_kind,
         "speedup_vs_torch_compile": _format_float(row.speedup_vs_torch_compile),
         "speedup_vs_reference": _format_float(row.speedup_vs_reference),
         "below_target": "" if row.below_target is None else str(row.below_target).lower(),
@@ -385,6 +403,17 @@ def _row_from_json(path: Path) -> EvalRow:
             int(payload["failed_stage"]) if payload.get("failed_stage") is not None else None
         ),
         failure_reason=str(payload.get("failure_reason", "")),
+        failure_kind=str(
+            payload.get("failure_kind")
+            or _classify_failure(
+                failed_stage=(
+                    int(payload["failed_stage"])
+                    if payload.get("failed_stage") is not None
+                    else None
+                ),
+                failure_reason=str(payload.get("failure_reason", "")),
+            )
+        ),
         speedup_vs_torch_compile=_parse_float_or_number(payload.get("speedup_vs_torch_compile")),
         speedup_vs_reference=_parse_float_or_number(payload.get("speedup_vs_reference")),
         below_target=(
@@ -393,6 +422,29 @@ def _row_from_json(path: Path) -> EvalRow:
         artifacts_dir=str(payload.get("artifacts_dir", "")),
         regression=str(payload.get("regression", "")),
     )
+
+
+def _classify_failure(*, failed_stage: int | None, failure_reason: str) -> str:
+    if not failure_reason:
+        return ""
+    reason = failure_reason.lower()
+    external_markers = (
+        "anthropic api",
+        "badrequesterror",
+        "rate limit",
+        "ratelimiterror",
+        "overloaded_error",
+        "apierror",
+        "credit balance",
+        "service unavailable",
+        "connection",
+        "timeout",
+    )
+    if any(marker in reason for marker in external_markers):
+        return "external_error"
+    if failed_stage is not None:
+        return "stage_failure"
+    return "runner_error"
 
 
 def _report_progress(progress: ProgressFn | None, message: str) -> None:
