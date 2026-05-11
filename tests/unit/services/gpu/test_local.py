@@ -282,6 +282,34 @@ def test_profile_invokes_ncu_and_parses_stdout(monkeypatch, tmp_path) -> None:
     assert str(so_path) in cmd
 
 
+def test_profile_parses_ncu_memory_throughput(monkeypatch, tmp_path) -> None:
+    fixture_csv = (
+        '"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream",'
+        '"Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit",'
+        '"Metric Value","Rule Name","Rule Type","Rule Description",'
+        '"Estimated Speedup Type","Estimated Speedup"\n'
+        '"0","1","p","h","k","1","7","(256,1,1)","(4,1,1)","0","8.0","Memory Workload Analysis",'
+        '"Memory Throughput","Gbyte/second","180.50","","","","",""\n'
+    )
+
+    def fake_which(name):
+        return "/usr/local/cuda/bin/ncu" if name == "ncu" else None
+
+    def fake_run(cmd, capture_output, text, timeout, check):
+        return SimpleNamespace(returncode=0, stdout=fixture_csv, stderr="")
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    so_path = tmp_path / "kernel.so"
+    so_path.write_bytes(b"")
+    runner = LocalGPURunner(SynthesisConfig(artifact_root=str(tmp_path)))
+
+    metrics = runner.profile(so_path, inputs=[])
+
+    assert metrics.achieved_bandwidth_gbps == 180.5
+
+
 def test_profile_returns_unavailable_metrics_when_ncu_subprocess_fails(
     monkeypatch, tmp_path
 ) -> None:

@@ -37,6 +37,11 @@ Optimization themes to consider:
   to shared memory only when the reduction crosses warp boundaries.
 - **Vectorized loads**: `float4`/`__half2` loads can double effective
   bandwidth for elementwise ops on aligned, contiguous data.
+- **Simple fused elementwise kernels**: for one-pass pointwise or fused
+  pointwise work, prefer one coalesced read/compute/write pass with enough
+  blocks to cover the tensor. Do not add multi-pass reductions, shared-memory
+  staging, or complicated synchronization unless the KernelSpec actually
+  requires cross-element communication.
 
 Output the complete revised CUDA source as one fenced `cuda` code block,
 then call `compile_kernel(src, target_arch)` with the exact source.

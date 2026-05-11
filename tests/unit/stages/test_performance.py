@@ -303,6 +303,20 @@ def test_format_perf_hints_flags_register_pressure_and_low_occupancy() -> None:
     assert any("slower than the eager baseline" in h for h in hints)
 
 
+def test_format_perf_hints_flags_low_bandwidth_with_vectorization_guidance() -> None:
+    metrics = NsightMetrics(occupancy=0.8, regs_per_thread=32)
+    benchmark = BenchmarkResult(
+        ok=True, custom_ms=1.05, baseline_ms=1.0, achieved_gbps=180.0,
+        warmup_iterations=10, timed_iterations=50,
+    )
+
+    hints = _format_perf_hints(metrics, benchmark=benchmark)
+
+    assert any("memory bandwidth" in h.lower() for h in hints)
+    assert any("vectorized" in h.lower() for h in hints)
+    assert any("half2" in h.lower() for h in hints)
+
+
 def test_format_perf_hints_falls_back_when_no_metrics_flag_anything() -> None:
     metrics = NsightMetrics(occupancy=0.9, regs_per_thread=32)
     benchmark = BenchmarkResult(

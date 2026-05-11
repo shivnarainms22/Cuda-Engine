@@ -336,6 +336,14 @@ def _format_perf_hints(
             f"Uncoalesced global loads at {metrics.uncoalesced_global_loads_pct:.1f}%. "
             "Restructure access patterns so 32 consecutive threads read 128 contiguous bytes."
         )
+    achieved_gbps = metrics.achieved_bandwidth_gbps or benchmark.achieved_gbps
+    if achieved_gbps is not None and achieved_gbps < 300.0:
+        hints.append(
+            f"Measured memory bandwidth is low ({achieved_gbps:.1f} GB/s). "
+            "For pointwise or fused elementwise kernels, prefer a single coalesced pass with "
+            "vectorized loads/stores such as float4 for fp32 or __half2 for fp16 when alignment "
+            "and shape divisibility allow it."
+        )
     if benchmark.baseline_ms is not None and benchmark.custom_ms > benchmark.baseline_ms:
         hints.append(
             f"Custom kernel ({benchmark.custom_ms:.3f}ms) is slower than the eager baseline "

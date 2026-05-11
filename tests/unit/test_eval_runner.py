@@ -194,6 +194,66 @@ def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) 
     assert per_kernel["passed"] is True
 
 
+def test_run_eval_suite_summary_reports_m3_metrics(tmp_path: Path) -> None:
+    from evals.runner import run_eval_suite
+
+    suite_root = tmp_path / "internal"
+    for name in ("fast_a", "fast_b", "slow_a", "slow_b", "failed"):
+        _kernel_dir(
+            suite_root,
+            name,
+            prompt=f"{name}.",
+            reference_body="return x",
+            shapes=[(128,), (1024,), (4097,)],
+        )
+
+    speedups = {
+        "fast_a.": 1.30,
+        "fast_b.": 1.10,
+        "slow_a.": 0.90,
+        "slow_b.": 0.70,
+    }
+
+    def fake_synthesize(
+        prompt: str,
+        reference: object,
+        target: str,
+        config: SynthesisConfig,
+    ) -> SynthesisResult:
+        if prompt == "failed.":
+            return _result(
+                kernel_name="failed",
+                passed=False,
+                run_id="failed",
+                artifacts_dir="/tmp/failed",
+                speedup=None,
+                failed_stage=3,
+                failure_reason="correctness failed",
+            )
+        return _result(
+            kernel_name=prompt.removesuffix("."),
+            passed=True,
+            run_id=prompt.removesuffix("."),
+            artifacts_dir=f"/tmp/{prompt.removesuffix('.')}",
+            speedup=speedups[prompt],
+            below_target=speedups[prompt] < 1.0,
+        )
+
+    run_eval_suite(
+        suite_root=suite_root,
+        out_dir=tmp_path / "results",
+        synthesize_fn=fake_synthesize,
+    )
+
+    summary_md = (tmp_path / "results" / "summary.md").read_text(encoding="utf-8")
+    assert "## M3 Metrics" in summary_md
+    assert "- Pass rate: 4/5 (80.0%)" in summary_md
+    assert "- Median speedup vs torch.compile: 1.00x" in summary_md
+    assert "- P25 speedup vs torch.compile: 0.85x" in summary_md
+    assert "- fast_1 kernels (>1.0x): 2/5" in summary_md
+    assert "- Below target kernels: 2/5" in summary_md
+
+
 def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:
     from evals.runner import run_eval_suite
 
@@ -409,6 +469,7 @@ def _result(
     run_id: str,
     artifacts_dir: str,
     speedup: float | None,
+    below_target: bool = False,
     failed_stage: int | None = None,
     failure_reason: str | None = None,
 ) -> SynthesisResult:
@@ -427,7 +488,7 @@ def _result(
         PerformanceReport(
             speedup_vs_reference=speedup,
             speedup_vs_torch_compile=speedup,
-            below_target=False,
+            below_target=below_target,
         )
         if speedup is not None
         else None

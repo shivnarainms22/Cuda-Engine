@@ -366,6 +366,7 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
     reader = csv.DictReader(io.StringIO(csv_text[header_index:]))
     occupancy: float | None = None
     regs_per_thread: int | None = None
+    achieved_bandwidth_gbps: float | None = None
     first_id: str | None = None
     for row in reader:
         row_id = row.get("ID", "")
@@ -375,6 +376,7 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
             continue
         section = (row.get("Section Name") or "").strip()
         metric = (row.get("Metric Name") or "").strip()
+        unit = (row.get("Metric Unit") or "").strip()
         value = (row.get("Metric Value") or "").strip()
         if not value:
             continue
@@ -386,10 +388,18 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
             and regs_per_thread is None
         ):
             regs_per_thread = int(_parse_float(value))
+        elif achieved_bandwidth_gbps is None:
+            achieved_bandwidth_gbps = _parse_bandwidth_gbps(
+                section=section,
+                metric=metric,
+                unit=unit,
+                value=value,
+            )
 
     return NsightMetrics(
         occupancy=occupancy,
         regs_per_thread=regs_per_thread,
+        achieved_bandwidth_gbps=achieved_bandwidth_gbps,
         raw_csv=csv_text,
     )
 
@@ -402,6 +412,23 @@ def _find_csv_header(csv_text: str) -> int | None:
 
 def _parse_float(value: str) -> float:
     return float(value.replace(",", ""))
+
+
+def _parse_bandwidth_gbps(*, section: str, metric: str, unit: str, value: str) -> float | None:
+    section_lower = section.lower()
+    metric_lower = metric.lower()
+    unit_lower = unit.lower()
+    if "memory" not in section_lower and "dram" not in section_lower and "l2" not in section_lower:
+        return None
+    if "throughput" not in metric_lower and "bandwidth" not in metric_lower:
+        return None
+
+    bandwidth = _parse_float(value)
+    if unit_lower in {"gbyte/second", "gb/s", "gbyte/s"}:
+        return bandwidth
+    if unit_lower in {"mbyte/second", "mb/s", "mbyte/s"}:
+        return bandwidth / 1000.0
+    return None
 
 
 def _read_child_stderr(output_path: Path) -> str:

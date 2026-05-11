@@ -24,6 +24,14 @@ def test_load_prompt_finds_polish_prompt() -> None:
     assert "tile" in prompt
 
 
+def test_load_prompt_finds_perf_fix_triage_guidance() -> None:
+    prompt = load_prompt("perf_fix")
+
+    assert "__half2" in prompt
+    assert "one-pass pointwise" in prompt
+    assert "Do not add multi-pass reductions" in prompt
+
+
 def test_load_prompt_raises_for_unknown_prompt() -> None:
     with pytest.raises(FileNotFoundError, match="Prompt not found"):
         load_prompt("missing")

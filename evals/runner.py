@@ -290,11 +290,19 @@ def _write_csv(path: Path, rows: list[EvalRow]) -> None:
 
 
 def _write_markdown(path: Path, rows: list[EvalRow]) -> None:
-    passed = sum(1 for row in rows if row.passed)
+    metrics = _m3_metrics(rows)
     lines = [
         "# CUDA Engine Eval Summary",
         "",
-        f"Pass rate: {passed}/{len(rows)}",
+        f"Pass rate: {metrics['passed']}/{metrics['total']}",
+        "",
+        "## M3 Metrics",
+        "",
+        f"- Pass rate: {metrics['passed']}/{metrics['total']} ({metrics['pass_rate_pct']:.1f}%)",
+        f"- Median speedup vs torch.compile: {_format_metric_speedup(metrics['median_speedup'])}",
+        f"- P25 speedup vs torch.compile: {_format_metric_speedup(metrics['p25_speedup'])}",
+        f"- fast_1 kernels (>1.0x): {metrics['fast_1']}/{metrics['total']}",
+        f"- Below target kernels: {metrics['below_target']}/{metrics['total']}",
         "",
         "| Kernel | Status | Speedup vs torch.compile | Regression |",
         "|---|---|---:|---|",
@@ -306,6 +314,44 @@ def _write_markdown(path: Path, rows: list[EvalRow]) -> None:
             f"{row.regression} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _m3_metrics(rows: list[EvalRow]) -> dict[str, float | int | None]:
+    total = len(rows)
+    passed = sum(1 for row in rows if row.passed)
+    speedups = sorted(
+        row.speedup_vs_torch_compile
+        for row in rows
+        if row.speedup_vs_torch_compile is not None
+    )
+    return {
+        "total": total,
+        "passed": passed,
+        "pass_rate_pct": (passed / total * 100.0) if total else 0.0,
+        "median_speedup": _percentile(speedups, 50.0),
+        "p25_speedup": _percentile(speedups, 25.0),
+        "fast_1": sum(1 for speedup in speedups if speedup > 1.0),
+        "below_target": sum(1 for row in rows if row.below_target is True),
+    }
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+
+    rank = (len(values) - 1) * (percentile / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(values) - 1)
+    fraction = rank - lower
+    return values[lower] + (values[upper] - values[lower]) * fraction
+
+
+def _format_metric_speedup(value: float | int | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.2f}x"
 
 
 def _row_to_csv(row: EvalRow) -> dict[str, str]:
