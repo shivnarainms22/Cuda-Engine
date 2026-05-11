@@ -37,6 +37,7 @@ packages = ["src/cuda_engine"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers -p no:cacheprovider"
+pythonpath = ["."]
 markers = [
     "integration: real LLM + real GPU (slow, costs money)",
 ]
