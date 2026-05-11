@@ -83,3 +83,91 @@ Notes:
 
 - Sonnet and Opus perf-attempt speedups are not available for this run because the perf retry/escalation path was not entered.
 - Final `below_target` was not printed in the provided pytest summary; the skip reason indicates the target was met before escalation.
+
+---
+
+## Internal Eval Checkpoint
+
+Run date: 2026-05-10  
+Environment: Colab Pro + A100 with real CUDA/ncu/Anthropic path  
+Branch: `m3/perf-loop`  
+Evidence type: console output supplied during Colab run. The Colab runtime reset before the `evals/results/2026-05-10` artifact directory could be zipped or downloaded, so this section records console-confirmed results rather than durable result artifacts.
+
+Command:
+
+```text
+cuda-engine eval --suite internal --out evals/results/2026-05-10
+```
+
+The first resumable run completed all 30 kernels after five existing partial results were skipped. Summary output:
+
+```text
+Eval complete: 29/30 passed
+CSV: evals/results/2026-05-10/results.csv
+Summary: evals/results/2026-05-10/summary.md
+```
+
+Per-kernel summary from `summary.md`:
+
+```text
+Pass rate: 29/30
+
+add_relu_fp32                 PASS  1.02
+argmax_fp32                   PASS  1.00
+bias_gelu_fp16                PASS  0.99
+clamp_fp32                    PASS  1.00
+cumulative_max_fp32           PASS  1.00
+dropout_fp16                  PASS  1.00
+geglu_fp16                    PASS  0.98
+gelu_fp16                     PASS  1.00
+l2_norm_fp32                  PASS  1.00
+layernorm_fp16                PASS  1.00
+layernorm_silu_fused_fp16     FAIL
+masked_mean_fp16              PASS  1.00
+max_lastdim_fp32              PASS  1.00
+mean_lastdim_fp32             PASS  1.00
+min_lastdim_fp32              PASS  1.00
+prefix_sum_fp32               PASS  1.00
+relu_bias_fp32                PASS  1.02
+rms_norm_fp16                 PASS  1.00
+rmsnorm_silu_fused_fp16       PASS  1.00
+scalar_multiply_fp32          PASS  1.00
+segment_sum_fp32              PASS  1.00
+sigmoid_mul_fp16              PASS  0.77
+silu_fp16                     PASS  1.00
+softmax_lastdim_fp16          PASS  1.00
+softmax_numerator_fp16        PASS  1.00
+sum_reduction_fp32            PASS  1.00
+swiglu_fp16                   PASS  1.01
+tanh_add_fp32                 PASS  0.98
+topk_fp32                     PASS  1.00
+vector_add_fp32               PASS  1.10
+```
+
+The only failure was not a generated-kernel correctness issue. The failed per-kernel JSON reported:
+
+```text
+layernorm_silu_fused_fp16 failed
+failure_reason: TypeError: reference() takes 1 positional argument but 3 were given
+```
+
+Root cause: `evals/internal/layernorm_silu_fused_fp16/prompt.txt` was ambiguous, so Stage 1 inferred affine LayerNorm inputs while `reference.py` intentionally accepted only `x`.
+
+Fix: commit `dafa563` (`fix(evals): disambiguate layernorm silu fixture inputs`) clarified that the fixture has exactly one input tensor and no affine gamma/beta parameters.
+
+Targeted rerun after the fix:
+
+```text
+[1/1] RUN layernorm_silu_fused_fp16
+[1/1] DONE layernorm_silu_fused_fp16 passed=True speedup=1.00
+Eval complete: 1/1 passed
+```
+
+Final interpreted internal functional result: `30/30` kernels passed after the fixture prompt fix and targeted rerun.
+
+Performance notes from the 30-kernel console summary:
+
+- `fast_1` from the pre-fix aggregate CSV: `4/30` (`add_relu_fp32`, `relu_bias_fp32`, `swiglu_fp16`, `vector_add_fp32` were visibly above 1.0x).
+- `below_target` from the pre-fix aggregate CSV: `4/30` (`bias_gelu_fp16`, `geglu_fp16`, `sigmoid_mul_fp16`, `tanh_add_fp32`).
+- The v1 fast_1 target (`>= 10/30`) is not met yet based on this first eval pass.
+- The M3 checkpoint still needs durable eval artifacts and specific evidence for Nsight feedback improvement and Sonnet->Opus escalation in an eval run.
