@@ -402,3 +402,72 @@ Interpretation:
 - The two failing rows are external API-credit failures during Stage 1, before generated kernels or correctness/performance execution. They are not evidence of kernel correctness failures.
 - `topk_fp32` and `vector_add_fp32` need a targeted `--no-resume` rerun after Anthropic credits are restored, because their failed per-kernel JSON files now exist and plain `--resume` would skip them.
 - `fast_1 >= 10/30` remains open (`1/30` in this run).
+
+---
+
+## GitHub CI Checkpoint
+
+Run date: 2026-05-11  
+Branch: `m3/perf-loop`  
+Fix commit: `bf9286f` (`fix(ci): make evals importable in unit tests`)  
+Passing workflow run: `25650538197`  
+Workflow: `PR`
+
+Issue: earlier GitHub `PR` workflow runs failed during unit-test collection with:
+
+```text
+ModuleNotFoundError: No module named 'evals'
+```
+
+Affected tests:
+
+```text
+tests/unit/test_cli.py
+tests/unit/test_internal_eval_suite.py
+```
+
+Fix:
+
+- Added `pythonpath = ["."]` to `[tool.pytest.ini_options]` in `pyproject.toml`.
+- Added `evals/__init__.py` so the source-checkout eval runner is importable as a package in CI.
+
+Verification:
+
+```text
+GitHub run 25650538197 completed successfully:
+- ruff check src tests
+- mypy src/
+- pytest tests/unit -v --cov=cuda_engine --cov-report=term-missing -m "not integration"
+```
+
+Local CI-parity verification also passed:
+
+```text
+python -m pytest tests/unit -v --cov=cuda_engine --cov-report=term-missing -m "not integration"
+python -m ruff check src tests evals
+python -m mypy src
+```
+
+---
+
+## M3 Checkpoint Status
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| All 30 internal kernels run end-to-end via `cuda-engine eval --suite internal` | Partial | Full resumed run attempted all 30. Two rows (`topk_fp32`, `vector_add_fp32`) stopped during Stage 1 due Anthropic credit exhaustion, not CUDA failure. Rerun only those two with `--no-resume` after credits are restored. |
+| Pass rate >= 25/30 functional on Colab A100 | Met | Full resumed run: `28/30` passed, even counting two external API-credit failures as failures. Earlier console-confirmed run plus targeted fixture rerun interpreted as `30/30` functional. |
+| >= 10/30 hit fast_1 (`>1.0x` vs torch.compile median) | Open | Full resumed run: `fast_1=1/30`; previous console-confirmed run showed `4/30`. Needs targeted performance strategy before M4. |
+| At least one kernel demonstrates Nsight feedback improvement | Met | Focused perf triage showed multiple `nsight=true` attempt improvements, including `geglu_fp16` `0.9691 -> 1.0` and `bias_gelu_fp16` `0.955 -> 0.9871`. |
+| At least one kernel demonstrates Sonnet->Opus escalation | Partially satisfied by accepted runbook skip | Colab Task 4.3 integration skipped because the initial kernel hit target before escalation (`model_used=none`). This is accepted by the Task 4.3 runbook, but there is not yet a real eval-row example where Opus succeeds after Sonnet bust. |
+| Eval report contains aggregate markdown, per-kernel JSON, and CSV | Met | Drive-backed output at `/content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901`; full zip `internal-eval-full-2026-05-11-011901.zip` (`114M`). |
+| Nightly CI workflow exists | Met | `.github/workflows/nightly.yml` added in `78710cd`, configured for self-hosted A100 runner labels and artifact upload. |
+
+Current M3 blockers before moving to M4:
+
+1. Restore Anthropic credits and rerun:
+
+   ```text
+   cuda-engine eval --suite internal --out "$OUT_DIR" --only topk_fp32,vector_add_fp32 --no-resume
+   ```
+
+2. Raise `fast_1` from current `1/30` toward the `>=10/30` checkpoint.
