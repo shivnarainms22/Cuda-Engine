@@ -252,3 +252,153 @@ Interpretation:
 - `geglu_fp16` recovered to target in the focused rerun.
 - `bias_gelu_fp16`, `sigmoid_mul_fp16`, and `tanh_add_fp32` remain below target.
 - The full M3 `fast_1 >= 10/30` checkpoint is still open; this focused subset has `0/4` fast_1 because `geglu_fp16` landed exactly at `1.00x`, and fast_1 is strictly `>1.0x`.
+
+---
+
+## Near-Threshold Perf Triage Checkpoint
+
+Run date: 2026-05-11  
+Environment: Colab Pro + A100 with real CUDA/ncu/Anthropic path  
+Branch: `m3/perf-loop`  
+Commit tested: `a7eee98` or later  
+Durable output directory: `/content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901`  
+Durable zip artifact: `/content/drive/MyDrive/cuda-engine-evals/internal-eval-near-threshold-2026-05-11-011901.zip` (`45M`)  
+Evidence type: Google Drive-backed eval output, zipped artifact, and console summary supplied during Colab run.
+
+Command:
+
+```text
+cuda-engine eval \
+  --suite internal \
+  --out /content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901 \
+  --only layernorm_fp16,masked_mean_fp16,rms_norm_fp16,rmsnorm_silu_fused_fp16,softmax_lastdim_fp16,softmax_numerator_fp16 \
+  --resume
+```
+
+Progress:
+
+```text
+[1/6] RUN layernorm_fp16
+[1/6] DONE layernorm_fp16 passed=True speedup=1.00
+[2/6] RUN masked_mean_fp16
+[2/6] DONE masked_mean_fp16 passed=True speedup=1.00
+[3/6] RUN rms_norm_fp16
+[3/6] DONE rms_norm_fp16 passed=True speedup=1.00
+[4/6] RUN rmsnorm_silu_fused_fp16
+[4/6] DONE rmsnorm_silu_fused_fp16 passed=True speedup=1.00
+[5/6] RUN softmax_lastdim_fp16
+[5/6] DONE softmax_lastdim_fp16 passed=True speedup=1.00
+[6/6] RUN softmax_numerator_fp16
+[6/6] DONE softmax_numerator_fp16 passed=True speedup=1.00
+Eval complete: 6/6 passed
+```
+
+Summary:
+
+```text
+# CUDA Engine Eval Summary
+
+Pass rate: 6/6
+
+## M3 Metrics
+
+- Pass rate: 6/6 (100.0%)
+- Median speedup vs torch.compile: 1.00x
+- P25 speedup vs torch.compile: 1.00x
+- fast_1 kernels (>1.0x): 0/6
+- Below target kernels: 0/6
+
+| Kernel | Status | Speedup vs torch.compile | Regression |
+|---|---|---:|---|
+| layernorm_fp16 | PASS | 1.00 |  |
+| masked_mean_fp16 | PASS | 1.00 |  |
+| rms_norm_fp16 | PASS | 1.00 |  |
+| rmsnorm_silu_fused_fp16 | PASS | 1.00 |  |
+| softmax_lastdim_fp16 | PASS | 1.00 |  |
+| softmax_numerator_fp16 | PASS | 1.00 |  |
+```
+
+Exact CSV rows:
+
+```text
+layernorm_fp16 passed=true speedup=1.00 below_target=false
+masked_mean_fp16 passed=true speedup=1.00 below_target=false
+rms_norm_fp16 passed=true speedup=1.00 below_target=false
+rmsnorm_silu_fused_fp16 passed=true speedup=1.00 below_target=false
+softmax_lastdim_fp16 passed=true speedup=1.00 below_target=false
+softmax_numerator_fp16 passed=true speedup=1.00 below_target=false
+```
+
+Interpretation:
+
+- The near-threshold rerun is functionally green (`6/6`).
+- No near-threshold kernel is below target.
+- This batch does not improve `fast_1`; all six landed at `1.00x`, while fast_1 requires strictly `>1.0x`.
+- The full M3 `fast_1 >= 10/30` checkpoint remains open.
+
+---
+
+## Full Resumed Eval Checkpoint
+
+Run date: 2026-05-11  
+Environment: Colab Pro + A100 with real CUDA/ncu/Anthropic path  
+Branch: `m3/perf-loop`  
+Commit tested: `a7eee98` or later  
+Durable output directory: `/content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901`  
+Durable zip artifact: `/content/drive/MyDrive/cuda-engine-evals/internal-eval-full-2026-05-11-011901.zip` (`114M`)  
+Evidence type: Google Drive-backed eval output, zipped artifact, and console summary supplied during Colab run.
+
+Command:
+
+```text
+cuda-engine eval \
+  --suite internal \
+  --out /content/drive/MyDrive/cuda-engine-evals/2026-05-11-011901 \
+  --resume
+```
+
+Summary:
+
+```text
+# CUDA Engine Eval Summary
+
+Pass rate: 28/30
+
+## M3 Metrics
+
+- Pass rate: 28/30 (93.3%)
+- Median speedup vs torch.compile: 1.00x
+- P25 speedup vs torch.compile: 1.00x
+- fast_1 kernels (>1.0x): 1/30
+- Below target kernels: 5/30
+```
+
+Failures:
+
+```text
+topk_fp32:
+  failure_reason: BadRequestError: Error code: 400 - credit balance is too low to access the Anthropic API
+  report.json: missing
+  artifacts persisted before failure:
+    inputs/config.json
+    inputs/prompt.txt
+    inputs/reference.py
+    stage1_interview/prompt_to_llm.md
+
+vector_add_fp32:
+  failure_reason: BadRequestError: Error code: 400 - credit balance is too low to access the Anthropic API
+  report.json: missing
+  artifacts persisted before failure:
+    inputs/config.json
+    inputs/prompt.txt
+    inputs/reference.py
+    stage1_interview/prompt_to_llm.md
+```
+
+Interpretation:
+
+- The full resumed run produced durable artifacts and a durable zip.
+- `28/30` kernels passed in this run; the M3 functional threshold (`>=25/30`) is met even counting the two API-credit failures as failures.
+- The two failing rows are external API-credit failures during Stage 1, before generated kernels or correctness/performance execution. They are not evidence of kernel correctness failures.
+- `topk_fp32` and `vector_add_fp32` need a targeted `--no-resume` rerun after Anthropic credits are restored, because their failed per-kernel JSON files now exist and plain `--resume` would skip them.
+- `fast_1 >= 10/30` remains open (`1/30` in this run).
