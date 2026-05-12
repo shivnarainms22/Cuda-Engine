@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ class BenchmarkResult(BaseModel):
     ok: bool
     custom_ms: float = 0.0
     baseline_ms: float | None = None
+    baseline_error: str | None = None
     achieved_gbps: float | None = None
     stdout: str = ""
     stderr: str = ""
@@ -71,6 +73,7 @@ class GPURunner(ABC):
         so_path: Path,
         inputs: list[Any],
         *,
+        reference: Callable[..., Any] | None = None,
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,

@@ -17,14 +17,14 @@ def main() -> None:
     parser.add_argument("--timed-iterations", type=int, default=50)
     args = parser.parse_args()
 
-    with Path(args.input).open("rb") as f:
-        inputs = pickle.load(f)
+    inputs, reference = _load_payload(Path(args.input))
 
     try:
         if args.benchmark:
             benchmark = _benchmark_forward(
                 Path(args.so),
                 inputs,
+                reference,
                 warmup_iterations=args.warmup_iterations,
                 timed_iterations=args.timed_iterations,
             )
@@ -45,6 +45,15 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as f:
         pickle.dump(payload, f)
+
+
+def _load_payload(input_path: Path) -> tuple[list[Any], Any]:
+    """Load pickle payload, supporting both legacy list and new dict formats."""
+    with input_path.open("rb") as f:
+        raw = pickle.load(f)
+    if isinstance(raw, dict):
+        return raw.get("inputs", []), raw.get("reference")
+    return raw, None
 
 
 def _run_forward(so_path: Path, inputs: list[Any]) -> Any:
@@ -87,6 +96,7 @@ def _torch_custom_op_forward(so_path: Path) -> Any:
 def _benchmark_forward(
     so_path: Path,
     inputs: list[Any],
+    reference: Any,
     *,
     warmup_iterations: int,
     timed_iterations: int,
@@ -104,26 +114,52 @@ def _benchmark_forward(
         use_cuda_events=_has_cuda_inputs(inputs),
     )
 
-    baseline_ms = None
-    if _can_vector_add_baseline(inputs):
-        for _ in range(warmup_iterations):
-            inputs[0] + inputs[1]
-        _synchronize_if_cuda(torch, inputs)
-        baseline_ms = _time_callable_ms(
-            torch,
-            lambda: inputs[0] + inputs[1],
-            iterations=timed_iterations,
-            use_cuda_events=_has_cuda_inputs(inputs),
+    baseline_ms: float | None = None
+    baseline_error: str | None = None
+    if reference is not None:
+        baseline_ms, baseline_error = _measure_torch_compile_baseline(
+            torch, reference, inputs,
+            warmup_iterations=warmup_iterations,
+            timed_iterations=timed_iterations,
         )
 
     return {
         "ok": True,
         "custom_ms": custom_ms,
         "baseline_ms": baseline_ms,
+        "baseline_error": baseline_error,
         "achieved_gbps": _achieved_gbps(inputs, custom_ms),
         "warmup_iterations": warmup_iterations,
         "timed_iterations": timed_iterations,
     }
+
+
+def _measure_torch_compile_baseline(
+    torch: Any,
+    reference: Any,
+    inputs: list[Any],
+    *,
+    warmup_iterations: int,
+    timed_iterations: int,
+) -> tuple[float | None, str | None]:
+    """Time torch.compile(reference) on the given inputs.
+
+    Returns (baseline_ms, error_str). Exactly one of them is None.
+    """
+    try:
+        compiled = torch.compile(reference, mode="reduce-overhead")
+        for _ in range(warmup_iterations):
+            compiled(*inputs)
+        _synchronize_if_cuda(torch, inputs)
+        baseline_ms = _time_callable_ms(
+            torch,
+            lambda: compiled(*inputs),
+            iterations=timed_iterations,
+            use_cuda_events=_has_cuda_inputs(inputs),
+        )
+        return baseline_ms, None
+    except Exception as exc:
+        return None, f"torch.compile baseline failed: {type(exc).__name__}: {exc}"
 
 
 def _time_callable_ms(torch: Any, action: Any, *, iterations: int, use_cuda_events: bool) -> float:
@@ -152,15 +188,6 @@ def _has_cuda_inputs(inputs: list[Any]) -> bool:
 def _synchronize_if_cuda(torch: Any, inputs: list[Any]) -> None:
     if _has_cuda_inputs(inputs):
         torch.cuda.synchronize()
-
-
-def _can_vector_add_baseline(inputs: list[Any]) -> bool:
-    return (
-        len(inputs) == 2
-        and hasattr(inputs[0], "__add__")
-        and hasattr(inputs[0], "numel")
-        and tuple(getattr(inputs[0], "shape", ())) == tuple(getattr(inputs[1], "shape", ()))
-    )
 
 
 def _achieved_gbps(inputs: list[Any], custom_ms: float) -> float | None:

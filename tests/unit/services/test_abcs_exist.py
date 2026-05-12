@@ -32,3 +32,16 @@ def test_store_is_abstract() -> None:
     assert inspect.isabstract(ArtifactStore)
     for method_name in ("new_run", "write_text", "write_bytes", "write_json", "run_dir"):
         assert method_name in dir(ArtifactStore)
+
+
+def test_benchmark_result_carries_baseline_error_field() -> None:
+    """Failed torch.compile baseline must surface as a structured error string."""
+    result = BenchmarkResult(
+        ok=True,
+        custom_ms=0.01,
+        baseline_ms=None,
+        baseline_error="torch.compile baseline failed: RuntimeError: graph too large",
+    )
+
+    assert result.baseline_error == "torch.compile baseline failed: RuntimeError: graph too large"
+    assert BenchmarkResult(ok=True, custom_ms=0.01).baseline_error is None

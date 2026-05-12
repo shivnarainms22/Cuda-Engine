@@ -84,6 +84,7 @@ def test_stage4_performance_uses_configured_benchmark_settings() -> None:
         {
             "so_path": Path("kernel.so"),
             "input_shapes": [(256,), (256,)],
+            "reference": None,
             "warmup_iterations": 2,
             "timed_iterations": 3,
             "timeout_seconds": 60,

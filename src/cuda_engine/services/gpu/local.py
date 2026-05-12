@@ -8,6 +8,7 @@ import sys
 import sysconfig
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -177,6 +178,7 @@ class LocalGPURunner(GPURunner):
         so_path: Path,
         inputs: list[Any],
         *,
+        reference: Callable[..., Any] | None = None,
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
@@ -186,7 +188,7 @@ class LocalGPURunner(GPURunner):
         input_path = run_dir / "inputs.pkl"
         output_path = run_dir / "benchmark.pkl"
         with input_path.open("wb") as f:
-            pickle.dump(inputs, f)
+            pickle.dump({"inputs": inputs, "reference": reference}, f)
 
         cmd = [
             sys.executable,

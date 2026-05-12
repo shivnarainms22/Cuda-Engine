@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ class MockGPURunner(GPURunner):
         so_path: Path,
         inputs: list[Any],
         *,
+        reference: Callable[..., Any] | None = None,
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
@@ -58,6 +60,7 @@ class MockGPURunner(GPURunner):
             {
                 "so_path": so_path,
                 "input_shapes": [tuple(getattr(input_value, "shape", ())) for input_value in inputs],
+                "reference": reference,
                 "warmup_iterations": warmup_iterations,
                 "timed_iterations": timed_iterations,
                 "timeout_seconds": timeout_seconds,
