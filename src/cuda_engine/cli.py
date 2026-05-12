@@ -37,6 +37,152 @@ def latest_report(runs_root: Path) -> None:
     _print_report_summary(report_path)
 
 
+@app.command("synthesize")
+def synthesize_cmd(
+    prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--prompt",
+            help="Prompt text. Mutually exclusive with --prompt-file.",
+        ),
+    ] = None,
+    prompt_file: Annotated[
+        Path | None,
+        typer.Option("--prompt-file", help="Path to a text file containing the prompt."),
+    ] = None,
+    reference: Annotated[
+        Path,
+        typer.Option(
+            "--reference",
+            help="Python file defining the reference function (variable REFERENCE or reference()).",
+        ),
+    ] = ...,  # type: ignore[assignment]
+    target: Annotated[str, typer.Option(help="CUDA target architecture.")] = "sm_80",
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            help="Artifact root for the run. Defaults to ~/.cache/cuda_engine/runs/.",
+        ),
+    ] = None,
+) -> None:
+    """Synthesize a single CUDA kernel from a prompt + reference function."""
+    if prompt is None and prompt_file is None:
+        typer.echo("error: one of --prompt or --prompt-file is required")
+        raise typer.Exit(code=2)
+    if prompt is not None and prompt_file is not None:
+        typer.echo("error: --prompt and --prompt-file are mutually exclusive")
+        raise typer.Exit(code=2)
+
+    if prompt is not None:
+        prompt_text = prompt
+    else:
+        assert prompt_file is not None  # narrowed by validation above
+        prompt_text = _read_text(prompt_file)
+    reference_fn = _load_reference_from_path(reference)
+
+    synthesize_fn = _resolve_synthesize_fn()
+    config = SynthesisConfig(artifact_root=str(out)) if out is not None else SynthesisConfig()
+    result = synthesize_fn(
+        prompt=prompt_text,
+        reference=reference_fn,
+        target=target,
+        config=config,
+    )
+
+    typer.echo(f"Run: {result.run_id}")
+    typer.echo(f"Status: {'PASS' if result.passed else 'FAIL'}")
+    typer.echo(f"Artifacts: {result.artifacts_dir}")
+    if not result.passed:
+        typer.echo(f"Failed stage: {result.failed_stage}")
+        typer.echo(f"Reason: {result.failure_reason}")
+        raise typer.Exit(code=1)
+
+
+@app.command("inspect")
+def inspect_run(
+    run: Annotated[
+        str,
+        typer.Argument(
+            help="Run id or path to a run directory containing report.json.",
+        ),
+    ],
+    runs_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--runs-root",
+            help="Directory containing run subdirectories. Defaults to ~/.cache/cuda_engine/runs.",
+        ),
+    ] = None,
+) -> None:
+    """Pretty-print the report for a synthesis run."""
+    run_dir = _resolve_run_dir(run, runs_root)
+    if run_dir is None:
+        typer.echo(f"run not found: {run}")
+        raise typer.Exit(code=1)
+    report_path = run_dir / "report.json"
+    if not report_path.exists():
+        typer.echo(f"report.json not found: {report_path}")
+        raise typer.Exit(code=1)
+    _print_report_summary(report_path)
+
+
+def _resolve_run_dir(run: str, runs_root: Path | None) -> Path | None:
+    direct = Path(run)
+    if direct.is_dir() and (direct / "report.json").exists():
+        return direct
+    root = runs_root if runs_root is not None else Path.home() / ".cache" / "cuda_engine" / "runs"
+    if not root.exists():
+        return None
+    candidate = root / run
+    if candidate.is_dir() and (candidate / "report.json").exists():
+        return candidate
+    # Tolerate truncated run_ids: pick the unique match if any.
+    matches = [
+        path for path in root.iterdir()
+        if path.is_dir() and path.name.startswith(run) and (path / "report.json").exists()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"could not read prompt file: {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def _load_reference_from_path(reference_path: Path) -> Any:
+    if not reference_path.exists():
+        typer.echo(f"reference file not found: {reference_path}")
+        raise typer.Exit(code=1)
+    module_name = f"cuda_engine_cli_reference_{reference_path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, reference_path)
+    if spec is None or spec.loader is None:
+        typer.echo(f"could not load reference module: {reference_path}")
+        raise typer.Exit(code=1)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        typer.echo(f"reference module failed to import: {exc}")
+        raise typer.Exit(code=1) from exc
+    reference = getattr(module, "REFERENCE", None) or getattr(module, "reference", None)
+    if not callable(reference):
+        typer.echo(f"reference file must define REFERENCE or reference(): {reference_path}")
+        raise typer.Exit(code=1)
+    return reference
+
+
+def _resolve_synthesize_fn() -> Any:
+    from cuda_engine import synthesize as synthesize_fn
+
+    return synthesize_fn
+
+
 @app.command("eval")
 def eval_suite(
     out: Annotated[Path, typer.Option("--out", help="Directory for aggregate eval outputs.")],
@@ -224,10 +370,18 @@ def _print_performance(performance: object, run_dir: Path) -> None:
         typer.echo("Performance: not available")
         return
 
+    def _fmt(value: object) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):.2f}"  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return "n/a"
+
     typer.echo(
         "Performance: "
-        f"speedup_vs_reference={float(performance.get('speedup_vs_reference', 0.0)):.2f}, "
-        f"speedup_vs_torch_compile={float(performance.get('speedup_vs_torch_compile', 0.0)):.2f}"
+        f"speedup_vs_reference={_fmt(performance.get('speedup_vs_reference'))}, "
+        f"speedup_vs_torch_compile={_fmt(performance.get('speedup_vs_torch_compile'))}"
     )
 
     achieved_gbps = performance.get("achieved_gbps")

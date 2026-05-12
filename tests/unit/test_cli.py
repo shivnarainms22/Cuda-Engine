@@ -275,6 +275,111 @@ def test_eval_command_runs_suite_and_prints_summary(tmp_path: Path, monkeypatch:
     assert f"Summary: {out_dir / 'summary.md'}" in result.stdout
 
 
+def test_synthesize_cmd_invokes_synthesize_and_prints_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`cuda-engine synthesize --prompt ... --reference path` calls synthesize()."""
+    from cuda_engine.models import SynthesisReport, SynthesisResult
+
+    ref_file = tmp_path / "reference.py"
+    ref_file.write_text("def reference(x):\n    return x\n", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_synthesize(*, prompt, reference, target, config):
+        captured["prompt"] = prompt
+        captured["target"] = target
+        captured["reference_callable"] = callable(reference)
+        return SynthesisResult.ok(
+            run_id="abc12345",
+            artifacts_dir=str(tmp_path / "runs" / "abc12345"),
+            report=SynthesisReport(
+                run_id="abc12345",
+                spec_name="my_kernel",
+                stages_executed=["interview"],
+                stage_traces=[],
+            ),
+            correctness=None,  # type: ignore[arg-type]
+            performance=None,
+            kernel_callable=None,
+        )
+
+    monkeypatch.setattr("cuda_engine.cli._resolve_synthesize_fn", lambda: fake_synthesize)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "synthesize",
+            "--prompt",
+            "make a vector add kernel",
+            "--reference",
+            str(ref_file),
+            "--target",
+            "sm_80",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["prompt"] == "make a vector add kernel"
+    assert captured["target"] == "sm_80"
+    assert captured["reference_callable"] is True
+    assert "Run: abc12345" in result.stdout
+    assert "Status: PASS" in result.stdout
+
+
+def test_synthesize_cmd_rejects_missing_prompt() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["synthesize", "--reference", "ignored.py"])
+    assert result.exit_code == 2
+    assert "one of --prompt or --prompt-file is required" in result.stdout
+
+
+def test_inspect_resolves_run_id_against_runs_root(tmp_path: Path) -> None:
+    """`cuda-engine inspect <run_id> --runs-root` looks up the run dir."""
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "deadbeef1234"
+    run_dir.mkdir(parents=True)
+    _write_report(
+        run_dir,
+        _minimal_report(run_id="deadbeef1234", run_dir=run_dir, spec_name="vector_add"),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["inspect", "deadbeef1234", "--runs-root", str(runs_root)]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Run: deadbeef1234" in result.stdout
+    assert "Spec: vector_add" in result.stdout
+
+
+def test_inspect_accepts_truncated_run_id(tmp_path: Path) -> None:
+    """A truncated unique run_id prefix resolves to the matching run dir."""
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "deadbeef1234"
+    run_dir.mkdir(parents=True)
+    _write_report(
+        run_dir,
+        _minimal_report(run_id="deadbeef1234", run_dir=run_dir, spec_name="x"),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["inspect", "deadbeef", "--runs-root", str(runs_root)])
+    assert result.exit_code == 0, result.stdout
+    assert "Run: deadbeef1234" in result.stdout
+
+
+def test_inspect_errors_when_run_not_found(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(app, ["inspect", "missing", "--runs-root", str(runs_root)])
+    assert result.exit_code == 1
+    assert "run not found" in result.stdout
+
+
 def _write_report(run_dir: Path, payload: dict[str, object]) -> None:
     (run_dir / "report.json").write_text(json.dumps(payload), encoding="utf-8")
 
