@@ -192,7 +192,7 @@ def test_stage4_performance_retries_until_target_met() -> None:
     stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
 
     report, final_artifact = stage.run(
-        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3
+        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=1
     )
 
     assert report.below_target is False
@@ -262,7 +262,7 @@ def test_stage4_performance_records_failed_compile_in_warnings_and_continues() -
     cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
     stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
 
-    report, _ = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3)
+    report, _ = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=2)
 
     assert report.below_target is False
     assert report.speedup_vs_torch_compile == 2.0
@@ -437,6 +437,138 @@ def test_stage4_escalates_to_opus_when_below_target() -> None:
     # Both attempt directories exist in store
     assert ("run123", "stage4_performance/perf_repair/attempt_01/kernel.cu") in store._files
     assert ("run123", "stage4_performance/perf_repair/attempt_02/kernel.cu") in store._files
+
+
+def test_perf_retry_loop_exhausts_budget_past_target() -> None:
+    """When attempt 1 already meets target, loop continues to attempt 3 to push past parity."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    at_target = BenchmarkResult(
+        ok=True, custom_ms=2.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    above_target = BenchmarkResult(
+        ok=True, custom_ms=1.9, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v1.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v3.so"), log="ok"),
+        ],
+        benchmark_results=[initial, at_target, at_target, above_target],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)] * 3,
+    )
+    llm = MockLLMClient(
+        [
+            _llm_compile_response("// v1 at parity"),
+            _llm_compile_response("// v2 at parity"),
+            _llm_compile_response("// v3 beats parity"),
+        ]
+    )
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _ = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3)
+
+    assert llm.call_count == 3, "loop should not early-exit when target met mid-loop"
+    assert report.speedup_vs_torch_compile > 1.0
+    assert abs(report.speedup_vs_torch_compile - (2.0 / 1.9)) < 1e-6
+
+
+def test_perf_retry_loop_returns_best_so_far_on_regression() -> None:
+    """Attempt 2 wins (1.10x), attempt 3 regresses (0.90x). Return attempt 2."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 0.5x triggers retry
+    at_target = BenchmarkResult(
+        ok=True, custom_ms=2.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 1.0x
+    best = BenchmarkResult(
+        ok=True, custom_ms=2.0 / 1.10, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 1.10x
+    regress = BenchmarkResult(
+        ok=True, custom_ms=2.0 / 0.90, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 0.90x
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v1.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v3.so"), log="ok"),
+        ],
+        benchmark_results=[initial, at_target, best, regress],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)] * 3,
+    )
+    llm = MockLLMClient(
+        [
+            _llm_compile_response("// v1 at parity"),
+            _llm_compile_response("// v2 best"),
+            _llm_compile_response("// v3 regression"),
+        ]
+    )
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _final_artifact = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3
+    )
+
+    assert llm.call_count == 3
+    assert abs(report.speedup_vs_torch_compile - 1.10) < 1e-3, (
+        f"expected best (1.10x) to be returned, got {report.speedup_vs_torch_compile}"
+    )
+    # Returned artifact should be the v2 (best) kernel
+    assert store._files[("run123", "stage4_performance/perf_repair/attempt_02/kernel.cu")] == b"// v2 best"
+    # v3's attempt dir is also written for inspection
+    assert ("run123", "stage4_performance/perf_repair/attempt_03/kernel.cu") in store._files
+
+
+def test_perf_retry_loop_first_wins_on_tie() -> None:
+    """Attempt 1 wins (1.05x), attempt 2 ties (1.05x), attempt 3 worse (1.00x). Return attempt 1."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    fast = BenchmarkResult(
+        ok=True, custom_ms=2.0 / 1.05, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    tie = BenchmarkResult(
+        ok=True, custom_ms=2.0 / 1.05, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    parity = BenchmarkResult(
+        ok=True, custom_ms=2.0, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )
+    gpu = MockGPURunner(
+        compile_results=[
+            CompileResult(ok=True, so_path=Path("/tmp/v1.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok"),
+            CompileResult(ok=True, so_path=Path("/tmp/v3.so"), log="ok"),
+        ],
+        benchmark_results=[initial, fast, tie, parity],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)] * 3,
+    )
+    llm = MockLLMClient(
+        [
+            _llm_compile_response("// v1 fast"),
+            _llm_compile_response("// v2 tie"),
+            _llm_compile_response("// v3 parity"),
+        ]
+    )
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _final_artifact = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3
+    )
+
+    assert abs(report.speedup_vs_torch_compile - 1.05) < 1e-3
+    # First-wins: attempt_01 should be the returned kernel
+    assert store._files[("run123", "stage4_performance/perf_repair/attempt_01/kernel.cu")] == b"// v1 fast"
 
 
 def test_stage4_skips_escalation_when_disabled() -> None:

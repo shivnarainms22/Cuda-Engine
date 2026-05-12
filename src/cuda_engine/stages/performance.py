@@ -157,6 +157,9 @@ class Stage4Performance(Stage):
         current_artifact = artifact
         current_benchmark = benchmark
         current_speedup = speedup
+        best_artifact = current_artifact
+        best_benchmark = current_benchmark
+        best_speedup = current_speedup
         system = [
             {
                 "type": "text",
@@ -167,9 +170,6 @@ class Stage4Performance(Stage):
 
         for local_attempt in range(1, retry_budget + 1):
             attempt = local_attempt + attempt_offset
-            if current_speedup >= target:
-                break
-
             if current_artifact.kernel_so_path is None:
                 warnings.append(f"perf_repair attempt {attempt}: missing kernel_so_path")
                 break
@@ -267,17 +267,22 @@ class Stage4Performance(Stage):
                 baseline_ms=new_benchmark.baseline_ms, custom_ms=new_benchmark.custom_ms
             )
             notes.append(
-                f"perf_repair attempt {attempt}: speedup {current_speedup:.3f} -> {new_speedup:.3f}"
+                f"perf_repair attempt {attempt}: speedup {current_speedup:.3f} -> "
+                f"{new_speedup:.3f} (best={max(best_speedup, new_speedup):.3f})"
             )
             current_artifact = candidate
             current_benchmark = new_benchmark
             current_speedup = new_speedup
+            if new_speedup > best_speedup:
+                best_artifact = candidate
+                best_benchmark = new_benchmark
+                best_speedup = new_speedup
 
-        if current_speedup < target:
+        if best_speedup < target:
             warnings.append(
-                f"perf retry budget exhausted: final speedup {current_speedup:.3f} below target {target:.3f}"
+                f"perf retry budget exhausted: best speedup {best_speedup:.3f} below target {target:.3f}"
             )
-        return current_artifact, current_benchmark, current_speedup, warnings, notes
+        return best_artifact, best_benchmark, best_speedup, warnings, notes
 
 
 def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float:
