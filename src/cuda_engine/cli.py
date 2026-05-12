@@ -210,7 +210,7 @@ def eval_suite(
 ) -> None:
     """Run an eval suite and write aggregate markdown/CSV results."""
     eval_runner = _load_eval_runner()
-    suite_root = Path("evals") / "internal" if suite == "internal" else Path(suite)
+    suite_root = _resolve_suite_root(suite)
     summary = eval_runner.run_eval_suite(
         suite_root=suite_root,
         out_dir=out,
@@ -226,6 +226,15 @@ def eval_suite(
     typer.echo(f"Eval complete: {passed}/{len(summary.rows)} passed")
     typer.echo(f"CSV: {summary.csv_path}")
     typer.echo(f"Summary: {summary.markdown_path}")
+
+
+def _resolve_suite_root(suite: str) -> Path:
+    """Map well-known suite names to their on-disk directories; passthrough paths."""
+    known: dict[str, Path] = {
+        "internal": Path("evals") / "internal",
+        "kernelbench": Path("evals") / "kernelbench" / "filtered",
+    }
+    return known.get(suite, Path(suite))
 
 
 def _load_eval_runner() -> ModuleType:

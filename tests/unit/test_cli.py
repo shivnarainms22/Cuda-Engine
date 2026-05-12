@@ -275,6 +275,28 @@ def test_eval_command_runs_suite_and_prints_summary(tmp_path: Path, monkeypatch:
     assert f"Summary: {out_dir / 'summary.md'}" in result.stdout
 
 
+def test_eval_resolves_kernelbench_suite_to_filtered_dir(monkeypatch, tmp_path: Path) -> None:
+    """`--suite kernelbench` maps to evals/kernelbench/filtered/ on disk."""
+    from cuda_engine.cli import _resolve_suite_root
+
+    suite_root = _resolve_suite_root("kernelbench")
+
+    assert suite_root == Path("evals") / "kernelbench" / "filtered"
+
+
+def test_eval_resolves_internal_suite_to_internal_dir() -> None:
+    from cuda_engine.cli import _resolve_suite_root
+
+    assert _resolve_suite_root("internal") == Path("evals") / "internal"
+
+
+def test_eval_resolves_arbitrary_suite_path_through() -> None:
+    """An unknown name is treated as a literal directory path."""
+    from cuda_engine.cli import _resolve_suite_root
+
+    assert _resolve_suite_root("/tmp/custom") == Path("/tmp/custom")
+
+
 def test_synthesize_cmd_invokes_synthesize_and_prints_summary(
     monkeypatch, tmp_path: Path
 ) -> None:
