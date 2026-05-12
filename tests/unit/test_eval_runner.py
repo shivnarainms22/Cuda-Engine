@@ -176,6 +176,7 @@ def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) 
         "speedup_vs_torch_compile",
         "speedup_vs_reference",
         "below_target",
+        "baseline_status",
         "artifacts_dir",
         "regression",
     ]
@@ -312,8 +313,9 @@ def test_run_eval_suite_summary_reports_m3_metrics(tmp_path: Path) -> None:
     assert "- Pass rate: 4/5 (80.0%)" in summary_md
     assert "- Median speedup vs torch.compile: 1.00x" in summary_md
     assert "- P25 speedup vs torch.compile: 0.85x" in summary_md
-    assert "- fast_1 kernels (>1.0x): 2/5" in summary_md
-    assert "- Below target kernels: 2/5" in summary_md
+    assert "- fast_1 kernels (>1.0x with measured baseline): 2/5" in summary_md
+    assert "- Below target kernels (with measured baseline): 2/5" in summary_md
+    assert "- baseline_failed (not counted in fast_1): 0/5" in summary_md
 
 
 def test_run_eval_suite_marks_baseline_regressions(tmp_path: Path) -> None:

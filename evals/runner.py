@@ -29,6 +29,7 @@ CSV_COLUMNS = [
     "speedup_vs_torch_compile",
     "speedup_vs_reference",
     "below_target",
+    "baseline_status",
     "artifacts_dir",
     "regression",
 ]
@@ -55,6 +56,7 @@ class EvalRow:
     below_target: bool | None
     artifacts_dir: str
     failure_kind: str = ""
+    baseline_status: str = ""
     regression: str = ""
 
 
@@ -197,24 +199,40 @@ def _run_kernel(
         )
 
     performance = result.performance
+    baseline_status = _baseline_status(performance)
+    failure_kind = _classify_failure(
+        failed_stage=result.failed_stage,
+        failure_reason=result.failure_reason or "",
+    )
+    if baseline_status == "failed" and not failure_kind:
+        failure_kind = "baseline_failed"
     return EvalRow(
         kernel=kernel.name,
         passed=result.passed,
         run_id=result.run_id,
         failed_stage=result.failed_stage,
         failure_reason=result.failure_reason or "",
-        failure_kind=_classify_failure(
-            failed_stage=result.failed_stage,
-            failure_reason=result.failure_reason or "",
-        ),
+        failure_kind=failure_kind,
         speedup_vs_torch_compile=(
             performance.speedup_vs_torch_compile if performance is not None else None
         ),
         speedup_vs_reference=(performance.speedup_vs_reference if performance is not None else None),
         below_target=(performance.below_target if performance is not None else None),
         artifacts_dir=result.artifacts_dir,
+        baseline_status=baseline_status,
         regression="",
     )
+
+
+def _baseline_status(performance: Any) -> str:
+    """Classify Stage 4 baseline measurement outcome for the eval row."""
+    if performance is None:
+        return ""
+    if performance.speedup_vs_torch_compile is not None:
+        return "ok"
+    if any("torch.compile baseline failed" in w for w in performance.warnings):
+        return "failed"
+    return "skipped"
 
 
 def _load_reference(reference_path: Path) -> Callable[..., Any]:
@@ -309,8 +327,9 @@ def _write_markdown(path: Path, rows: list[EvalRow]) -> None:
         f"- Pass rate: {metrics['passed']}/{metrics['total']} ({metrics['pass_rate_pct']:.1f}%)",
         f"- Median speedup vs torch.compile: {_format_metric_speedup(metrics['median_speedup'])}",
         f"- P25 speedup vs torch.compile: {_format_metric_speedup(metrics['p25_speedup'])}",
-        f"- fast_1 kernels (>1.0x): {metrics['fast_1']}/{metrics['total']}",
-        f"- Below target kernels: {metrics['below_target']}/{metrics['total']}",
+        f"- fast_1 kernels (>1.0x with measured baseline): {metrics['fast_1']}/{metrics['total']}",
+        f"- baseline_failed (not counted in fast_1): {metrics['baseline_failed']}/{metrics['total']}",
+        f"- Below target kernels (with measured baseline): {metrics['below_target']}/{metrics['total']}",
         "",
         "## Failure Breakdown",
         "",
@@ -345,7 +364,10 @@ def _m3_metrics(rows: list[EvalRow]) -> dict[str, float | int | None]:
         "median_speedup": _percentile(speedups, 50.0),
         "p25_speedup": _percentile(speedups, 25.0),
         "fast_1": sum(1 for speedup in speedups if speedup > 1.0),
-        "below_target": sum(1 for row in rows if row.below_target is True),
+        "below_target": sum(
+            1 for row in rows if row.below_target is True and row.baseline_status == "ok"
+        ),
+        "baseline_failed": sum(1 for row in rows if row.baseline_status == "failed"),
         "external_failures": sum(1 for row in rows if row.failure_kind == "external_error"),
         "stage_failures": sum(1 for row in rows if row.failure_kind == "stage_failure"),
         "runner_failures": sum(1 for row in rows if row.failure_kind == "runner_error"),
@@ -382,6 +404,7 @@ def _row_to_csv(row: EvalRow) -> dict[str, str]:
         "speedup_vs_torch_compile": _format_float(row.speedup_vs_torch_compile),
         "speedup_vs_reference": _format_float(row.speedup_vs_reference),
         "below_target": "" if row.below_target is None else str(row.below_target).lower(),
+        "baseline_status": row.baseline_status,
         "artifacts_dir": row.artifacts_dir,
         "regression": row.regression,
     }
@@ -420,6 +443,7 @@ def _row_from_json(path: Path) -> EvalRow:
             bool(payload["below_target"]) if payload.get("below_target") is not None else None
         ),
         artifacts_dir=str(payload.get("artifacts_dir", "")),
+        baseline_status=str(payload.get("baseline_status", "")),
         regression=str(payload.get("regression", "")),
     )
 
