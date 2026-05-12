@@ -43,6 +43,13 @@ Optimization themes to consider:
   staging, or complicated synchronization unless the KernelSpec actually
   requires cross-element communication.
 
+Matching torch.compile is acceptable but not the goal. To strictly beat it on A100:
+- Prefer vectorized memory ops: `float4` for fp32, `__half2` for fp16. They double effective bandwidth on aligned contiguous data.
+- Align grid to A100's 108 SMs. A full wave is a multiple of 108 blocks; a partial tail wave wastes runtime. For tensors that don't divide evenly, prefer fewer-larger blocks over more-smaller.
+- Maximize instruction-level parallelism: `#pragma unroll` inner loops with small bounded trip count. Keep enough independent work per thread to hide arithmetic and memory latency.
+- Fuse passes when the KernelSpec permits. Reductions followed by elementwise can often be one-pass with `__shfl_down_sync` warp reductions.
+- Inspect register pressure first if Nsight shows occupancy < 50%. If regs/thread > 64 on a 256-thread block, work-split or block-size reduction frees waves.
+
 Output the complete revised CUDA source as one fenced `cuda` code block,
 then call `compile_kernel(src, target_arch)` with the exact source.
 
