@@ -13,8 +13,8 @@ class CorrectnessReport(BaseModel):
 
 
 class PerformanceReport(BaseModel):
-    speedup_vs_reference: float
-    speedup_vs_torch_compile: float
+    speedup_vs_reference: float | None = None
+    speedup_vs_torch_compile: float | None = None
     achieved_tflops: float | None = None
     achieved_gbps: float | None = None
     occupancy: float | None = None

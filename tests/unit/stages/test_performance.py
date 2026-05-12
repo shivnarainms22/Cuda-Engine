@@ -120,8 +120,8 @@ def test_stage4_performance_reports_missing_shared_object() -> None:
         run_id="run123",
     )
 
-    assert report.speedup_vs_reference == 0.0
-    assert report.speedup_vs_torch_compile == 0.0
+    assert report.speedup_vs_reference is None
+    assert report.speedup_vs_torch_compile is None
     assert report.below_target is True
     assert b"kernel_so_path is required" in store._files[("run123", "stage4_performance/report.json")]
 
@@ -319,6 +319,92 @@ def test_stage4_performance_skips_retry_when_llm_unavailable() -> None:
     assert returned is artifact
 
 
+def test_speedup_returns_none_when_baseline_missing() -> None:
+    from cuda_engine.stages.performance import _speedup
+
+    assert _speedup(baseline_ms=None, custom_ms=0.01) is None
+
+
+def test_speedup_returns_none_when_custom_ms_nonpositive() -> None:
+    from cuda_engine.stages.performance import _speedup
+
+    assert _speedup(baseline_ms=0.01, custom_ms=0.0) is None
+    assert _speedup(baseline_ms=0.01, custom_ms=-1.0) is None
+
+
+def test_speedup_returns_ratio_on_normal_inputs() -> None:
+    from cuda_engine.stages.performance import _speedup
+
+    assert _speedup(baseline_ms=2.0, custom_ms=1.0) == 2.0
+
+
+def test_stage4_below_target_when_baseline_failed() -> None:
+    """When baseline measurement fails, speedup is None and below_target is True."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// kernel")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=0.01, baseline_ms=None,
+        baseline_error="torch.compile baseline failed: RuntimeError: traced graph too large",
+        warmup_iterations=10, timed_iterations=50,
+    )
+    gpu = MockGPURunner(benchmark_results=[initial])
+    cfg = SynthesisConfig(
+        perf_target_speedup_vs_torch_compile=1.0,
+        opus_retry_budget_performance=0,
+    )
+    stage = Stage4Performance(llm=None, gpu=gpu, store=store, cfg=cfg)
+
+    def _ref(x):
+        return x
+
+    report, _ = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123",
+        retry_budget=0, reference=_ref,
+    )
+
+    assert report.speedup_vs_torch_compile is None
+    assert report.below_target is True
+    assert any("torch.compile baseline failed" in w for w in report.warnings)
+
+
+def test_stage4_retry_loop_reuses_cached_baseline() -> None:
+    """First benchmark gets the reference; retry benchmarks get reference=None."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial slow")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0,
+        warmup_iterations=10, timed_iterations=50,
+    )  # 0.5x — triggers retry loop
+    faster = BenchmarkResult(
+        ok=True, custom_ms=1.0, baseline_ms=None,
+        warmup_iterations=10, timed_iterations=50,
+    )
+    gpu = MockGPURunner(
+        compile_results=[CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok")],
+        benchmark_results=[initial, faster],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)],
+    )
+    llm = MockLLMClient([_llm_compile_response("// faster kernel")])
+    cfg = SynthesisConfig(
+        perf_target_speedup_vs_torch_compile=1.0,
+        opus_retry_budget_performance=0,
+    )
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    def _ref(x):
+        return x
+
+    report, _ = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123",
+        retry_budget=1, reference=_ref,
+    )
+
+    assert gpu.benchmark_calls[0]["reference"] is _ref
+    assert gpu.benchmark_calls[1]["reference"] is None
+    # Final speedup uses cached baseline 2.0 against retry custom_ms 1.0 → 2.0
+    assert report.speedup_vs_torch_compile == 2.0
+
+
 def test_format_perf_hints_flags_register_pressure_and_low_occupancy() -> None:
     metrics = NsightMetrics(occupancy=0.4, regs_per_thread=80, spill_bytes=64)
     benchmark = BenchmarkResult(
@@ -397,6 +483,7 @@ def test_perf_retry_loop_uses_model_and_offset(tmp_path: Path) -> None:
         retry_budget=1,
         model="claude-opus-4-7",
         attempt_offset=3,
+        baseline_ms=benchmark_below.baseline_ms,
     )
 
     # Model forwarded to LLM

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 from cuda_engine.config import SynthesisConfig
@@ -33,13 +34,14 @@ class Stage4Performance(Stage):
         artifact: KernelArtifact,
         run_id: str,
         retry_budget: int = 3,
+        reference: Callable[..., Any] | None = None,
     ) -> tuple[PerformanceReport, KernelArtifact]:
         if self.gpu is None or self.store is None:
             raise RuntimeError("Stage4Performance requires gpu and store services")
         if artifact.kernel_so_path is None:
             report = PerformanceReport(
-                speedup_vs_reference=0.0,
-                speedup_vs_torch_compile=0.0,
+                speedup_vs_reference=None,
+                speedup_vs_torch_compile=None,
                 below_target=True,
                 notes=["kernel_so_path is required for performance benchmarking"],
             )
@@ -51,6 +53,7 @@ class Stage4Performance(Stage):
         benchmark = self.gpu.benchmark_kernel(
             artifact.kernel_so_path,
             inputs,
+            reference=reference,
             warmup_iterations=self.cfg.benchmark_warmup_iterations,
             timed_iterations=self.cfg.benchmark_timed_iterations,
         )
@@ -62,25 +65,28 @@ class Stage4Performance(Stage):
 
         if not benchmark.ok:
             report = PerformanceReport(
-                speedup_vs_reference=0.0,
-                speedup_vs_torch_compile=0.0,
+                speedup_vs_reference=None,
+                speedup_vs_torch_compile=None,
                 below_target=True,
                 notes=[benchmark.stderr or "benchmark failed"],
             )
             _write_report(self.store, run_id, report)
             return report, artifact
 
-        speedup = _speedup(baseline_ms=benchmark.baseline_ms, custom_ms=benchmark.custom_ms)
+        cached_baseline_ms = benchmark.baseline_ms
+        speedup = _speedup(baseline_ms=cached_baseline_ms, custom_ms=benchmark.custom_ms)
         target = self.cfg.perf_target_speedup_vs_torch_compile
         warnings: list[str] = []
         notes: list[str] = []
+        if benchmark.baseline_error is not None:
+            warnings.append(benchmark.baseline_error)
 
         current_artifact = artifact
         current_benchmark = benchmark
         current_speedup = speedup
 
         if self.llm is not None and retry_budget > 0:
-            current_artifact, current_benchmark, current_speedup, warnings, notes = self._retry_loop(
+            current_artifact, current_benchmark, current_speedup, retry_warnings, retry_notes = self._retry_loop(
                 spec=spec,
                 artifact=current_artifact,
                 benchmark=current_benchmark,
@@ -91,16 +97,20 @@ class Stage4Performance(Stage):
                 retry_budget=retry_budget,
                 model=self.cfg.sonnet_model,
                 attempt_offset=0,
+                baseline_ms=cached_baseline_ms,
             )
+            warnings.extend(retry_warnings)
+            notes.extend(retry_notes)
 
         if (
-            current_speedup < target
+            (current_speedup is None or current_speedup < target)
             and self.cfg.escalate_to_opus_on_bust
             and self.cfg.opus_retry_budget_performance > 0
             and self.llm is not None
         ):
             notes.append(
-                f"escalated to opus after sonnet retry budget exhausted at speedup {current_speedup:.3f}"
+                f"escalated to opus after sonnet retry budget exhausted at speedup "
+                f"{_fmt_speedup(current_speedup)}"
             )
             (
                 current_artifact,
@@ -119,6 +129,7 @@ class Stage4Performance(Stage):
                 retry_budget=self.cfg.opus_retry_budget_performance,
                 model=self.cfg.opus_model,
                 attempt_offset=retry_budget,
+                baseline_ms=cached_baseline_ms,
             )
             warnings.extend(opus_warnings)
             notes.extend(opus_notes)
@@ -127,7 +138,7 @@ class Stage4Performance(Stage):
             speedup_vs_reference=current_speedup,
             speedup_vs_torch_compile=current_speedup,
             achieved_gbps=current_benchmark.achieved_gbps,
-            below_target=current_speedup < target,
+            below_target=current_speedup is None or current_speedup < target,
             warnings=warnings,
             notes=notes,
         )
@@ -140,14 +151,15 @@ class Stage4Performance(Stage):
         spec: KernelSpec,
         artifact: KernelArtifact,
         benchmark: BenchmarkResult,
-        speedup: float,
+        speedup: float | None,
         target: float,
         inputs: list[Any],
         run_id: str,
         retry_budget: int,
         model: str,
         attempt_offset: int = 0,
-    ) -> tuple[KernelArtifact, BenchmarkResult, float, list[str], list[str]]:
+        baseline_ms: float | None,
+    ) -> tuple[KernelArtifact, BenchmarkResult, float | None, list[str], list[str]]:
         assert self.llm is not None
         assert self.gpu is not None
         assert self.store is not None
@@ -251,6 +263,7 @@ class Stage4Performance(Stage):
             new_benchmark = self.gpu.benchmark_kernel(
                 candidate_so,
                 inputs,
+                reference=None,
                 warmup_iterations=self.cfg.benchmark_warmup_iterations,
                 timed_iterations=self.cfg.benchmark_timed_iterations,
             )
@@ -264,31 +277,45 @@ class Stage4Performance(Stage):
                 continue
 
             new_speedup = _speedup(
-                baseline_ms=new_benchmark.baseline_ms, custom_ms=new_benchmark.custom_ms
+                baseline_ms=baseline_ms, custom_ms=new_benchmark.custom_ms
             )
+            next_best = _max_optional(best_speedup, new_speedup)
             notes.append(
-                f"perf_repair attempt {attempt}: speedup {current_speedup:.3f} -> "
-                f"{new_speedup:.3f} (best={max(best_speedup, new_speedup):.3f})"
+                f"perf_repair attempt {attempt}: speedup {_fmt_speedup(current_speedup)} -> "
+                f"{_fmt_speedup(new_speedup)} (best={_fmt_speedup(next_best)})"
             )
             current_artifact = candidate
             current_benchmark = new_benchmark
             current_speedup = new_speedup
-            if new_speedup > best_speedup:
+            if new_speedup is not None and (best_speedup is None or new_speedup > best_speedup):
                 best_artifact = candidate
                 best_benchmark = new_benchmark
                 best_speedup = new_speedup
 
-        if best_speedup < target:
+        if best_speedup is None or best_speedup < target:
             warnings.append(
-                f"perf retry budget exhausted: best speedup {best_speedup:.3f} below target {target:.3f}"
+                f"perf retry budget exhausted: best speedup {_fmt_speedup(best_speedup)} "
+                f"below target {target:.3f}"
             )
         return best_artifact, best_benchmark, best_speedup, warnings, notes
 
 
-def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float:
+def _speedup(*, baseline_ms: float | None, custom_ms: float) -> float | None:
     if baseline_ms is None or custom_ms <= 0:
-        return 1.0
+        return None
     return baseline_ms / custom_ms
+
+
+def _max_optional(a: float | None, b: float | None) -> float | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return max(a, b)
+
+
+def _fmt_speedup(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "n/a"
 
 
 def _benchmark_shape(spec: KernelSpec, *, total_elements: int) -> tuple[int, ...]:
@@ -370,14 +397,14 @@ def _build_perf_repair_user_message(
     benchmark: BenchmarkResult,
     metrics: NsightMetrics,
     hints: list[str],
-    speedup: float,
+    speedup: float | None,
     target: float,
 ) -> str:
     hints_block = "\n".join(f"- {hint}" for hint in hints)
     return (
         "Revise this CUDA kernel to improve performance, then call "
         "compile_kernel(src, target_arch).\n\n"
-        f"Current speedup vs torch.compile: {speedup:.3f} (target: {target:.3f}).\n\n"
+        f"Current speedup vs torch.compile: {_fmt_speedup(speedup)} (target: {target:.3f}).\n\n"
         f"KernelSpec:\n{spec.model_dump_json(indent=2)}\n\n"
         f"BenchmarkResult:\n{benchmark.model_dump_json(indent=2)}\n\n"
         f"NsightMetrics:\n{metrics.model_dump_json(indent=2)}\n\n"

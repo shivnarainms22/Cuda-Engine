@@ -169,6 +169,7 @@ class Orchestrator:
                 artifact=artifact,
                 run_id=run_id,
                 retry_budget=self.cfg.retry_budgets.performance,
+                reference=reference,
             ),
         )
         artifact = _run_traced_stage(
