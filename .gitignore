@@ -15,6 +15,7 @@ htmlcov/
 .test_artifacts/
 runs/
 evals/results/
+examples/kernels/*/run_dir/
 *.so
 *.cubin
 *.ptx

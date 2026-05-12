@@ -1,0 +1,1 @@
+Generate a fp16 softmax kernel over the last dimension of a 2D tensor: out[i, j] = exp(x[i, j] - max_j(x[i, j])) / sum_j(exp(x[i, j] - max_j)). Use the standard max-subtraction trick for numerical stability and accumulate the sum in fp32 before casting back to fp16.

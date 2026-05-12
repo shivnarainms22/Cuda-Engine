@@ -1,0 +1,1 @@
+Generate a fp32 top-k kernel that returns the k largest elements (with their original indices) along the last dimension of a 2D input tensor. Output the values in descending order. k is small (k ≤ 32). Use a per-row mini-heap or partial-sort approach; full sort is acceptable when k is close to the row length.

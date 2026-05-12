@@ -1,0 +1,1 @@
+Generate a fused fp16 kernel that applies RMSNorm over the last dimension and then SiLU activation: out = silu(x / sqrt(mean(x*x, dim=-1, keepdim=True) + 1e-5)). Accumulate the RMS in fp32 for numerical stability, return fp16 output. No affine scale/shift parameters — input is a single 2D tensor.
