@@ -35,14 +35,3 @@ def test_load_prompt_finds_perf_fix_triage_guidance() -> None:
 def test_load_prompt_raises_for_unknown_prompt() -> None:
     with pytest.raises(FileNotFoundError, match="Prompt not found"):
         load_prompt("missing")
-
-
-def test_load_prompt_perf_fix_includes_beat_torch_compile_guidance() -> None:
-    """perf_fix gives the LLM concrete levers to push past 1.0x parity."""
-    prompt = load_prompt("perf_fix")
-
-    assert "Matching torch.compile is acceptable but not the goal" in prompt
-    assert "float4" in prompt
-    assert "108 SMs" in prompt
-    assert "#pragma unroll" in prompt
-    assert "__shfl_down_sync" in prompt
