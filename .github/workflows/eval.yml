@@ -1,0 +1,123 @@
+name: Pre-release Eval
+
+# Manual trigger only. Runs the full internal eval suite on a self-hosted
+# A100 runner and posts results as both an artifact and a PR comment.
+# Used as the v1.0 release gate per M4 Task 5.9.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit to evaluate (default: current)"
+        required: false
+        default: ""
+      suite:
+        description: "Eval suite to run"
+        required: false
+        default: "internal"
+        type: choice
+        options:
+          - internal
+          - kernelbench
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pre-release-eval:
+    name: Pre-release eval on A100
+    runs-on: [self-hosted, linux, x64, a100]
+    timeout-minutes: 480
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CUDA_ENGINE_EVAL_OUT: evals/results/prerelease-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify GPU tooling
+        run: |
+          nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader
+          which nvcc && nvcc --version
+          which ncu && ncu --version
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run pre-release eval
+        run: |
+          mkdir -p "$CUDA_ENGINE_EVAL_OUT"
+          cuda-engine eval \
+            --suite ${{ inputs.suite }} \
+            --out "$CUDA_ENGINE_EVAL_OUT" \
+            --resume
+
+      - name: Summarize eval gate
+        id: gate
+        if: always()
+        run: |
+          SUMMARY="$CUDA_ENGINE_EVAL_OUT/summary.md"
+          if [ ! -f "$SUMMARY" ]; then
+            echo "summary_exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "summary_exists=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Pre-release Eval Results"
+            echo
+            echo "**Ref:** \`${{ inputs.ref || github.ref }}\`"
+            echo "**Suite:** \`${{ inputs.suite }}\`"
+            echo "**Run ID:** \`${{ github.run_id }}\`"
+            echo
+            cat "$SUMMARY"
+          } > "$CUDA_ENGINE_EVAL_OUT/pr-comment.md"
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-engine-prerelease-eval-${{ github.run_id }}
+          path: |
+            ${{ env.CUDA_ENGINE_EVAL_OUT }}/results.csv
+            ${{ env.CUDA_ENGINE_EVAL_OUT }}/summary.md
+            ${{ env.CUDA_ENGINE_EVAL_OUT }}/pr-comment.md
+            ${{ env.CUDA_ENGINE_EVAL_OUT }}/kernels/**/*.json
+            ${{ env.CUDA_ENGINE_EVAL_OUT }}/artifacts/**
+          if-no-files-found: warn
+
+      - name: Comment on associated PR
+        if: |
+          always()
+          && steps.gate.outputs.summary_exists == 'true'
+          && github.event.workflow_run.event == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(process.env.CUDA_ENGINE_EVAL_OUT + '/pr-comment.md', 'utf8');
+            // Find a PR associated with the ref
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+            const inputRef = '${{ inputs.ref || github.ref }}'.replace('refs/heads/', '');
+            const pr = prs.data.find(p => p.head.ref === inputRef);
+            if (pr) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body,
+              });
+            } else {
+              core.info('No open PR found for ref ' + inputRef + '; skipping comment.');
+            }
