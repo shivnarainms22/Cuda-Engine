@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from cuda_engine import SynthesisConfig, SynthesisResult, synthesize
+from cuda_engine.config import RetryBudgets
 from cuda_engine.services.gpu.base import CompileResult, RunResult
 from cuda_engine.services.gpu.mocks import MockGPURunner
 from cuda_engine.services.llm.base import LLMResponse
@@ -18,7 +19,7 @@ def test_synthesize_returns_result_with_mocks() -> None:
         prompt="noop",
         reference=lambda x: x,
         target="sm_80",
-        config=SynthesisConfig(),
+        config=SynthesisConfig(retry_budgets=RetryBudgets(performance=0)),
         _llm=MockLLMClient(
             responses=[
                 SPEC_JSON,

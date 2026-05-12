@@ -68,6 +68,46 @@ def test_stage1_interview_normalizes_contiguous_layout_hint() -> None:
     assert spec.outputs[0].layout_hint == "row_major"
 
 
+def test_stage1_interview_normalizes_hyphenated_layout_hints() -> None:
+    """LLM sometimes emits 'row-major' / 'col-major' — normalize to underscore form."""
+    spec = _parse_kernel_spec(
+        """```json
+{
+  "name": "vec",
+  "target_arch": "sm_80",
+  "inputs": [
+    {"name": "x", "dtype": "fp32", "shape": ["N"], "layout_hint": "row-major"},
+    {"name": "y", "dtype": "fp32", "shape": ["N"], "layout_hint": "col-major"}
+  ],
+  "outputs": [{"name": "out", "dtype": "fp32", "shape": ["N"], "layout_hint": "row-major"}],
+  "precision_tolerance": {"rtol": 1e-5, "atol": 1e-6},
+  "optimization_priority": "balanced"
+}
+```"""
+    )
+
+    assert spec.inputs[0].layout_hint == "row_major"
+    assert spec.inputs[1].layout_hint == "col_major"
+    assert spec.outputs[0].layout_hint == "row_major"
+
+
+def test_stage1_interview_defaults_missing_optimization_priority() -> None:
+    """LLM sometimes omits optimization_priority — default to 'balanced' rather than 422."""
+    spec = _parse_kernel_spec(
+        """```json
+{
+  "name": "vec",
+  "target_arch": "sm_80",
+  "inputs": [{"name": "x", "dtype": "fp32", "shape": ["N"]}],
+  "outputs": [{"name": "out", "dtype": "fp32", "shape": ["N"]}],
+  "precision_tolerance": {"rtol": 1e-5, "atol": 1e-6}
+}
+```"""
+    )
+
+    assert spec.optimization_priority == "balanced"
+
+
 def test_stage1_interview_returns_frozen_spec() -> None:
     stage = Stage1Interview(
         llm=MockLLMClient(

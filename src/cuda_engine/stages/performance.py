@@ -79,7 +79,7 @@ class Stage4Performance(Stage):
         current_benchmark = benchmark
         current_speedup = speedup
 
-        if current_speedup < target and self.llm is not None and retry_budget > 0:
+        if self.llm is not None and retry_budget > 0:
             current_artifact, current_benchmark, current_speedup, warnings, notes = self._retry_loop(
                 spec=spec,
                 artifact=current_artifact,

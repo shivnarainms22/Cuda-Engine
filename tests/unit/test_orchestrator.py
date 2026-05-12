@@ -47,6 +47,7 @@ def test_orchestrator_happy_path_with_mocks() -> None:
         ),
         store=store,
         cfg=SynthesisConfig(
+            retry_budgets=RetryBudgets(performance=0),
             performance_shape_n=256,
             benchmark_warmup_iterations=2,
             benchmark_timed_iterations=3,
@@ -114,7 +115,10 @@ def test_orchestrator_passes_configured_correctness_shapes() -> None:
             ],
         ),
         store=store,
-        cfg=SynthesisConfig(correctness_shapes=((2, 3), (4, 5))),
+        cfg=SynthesisConfig(
+            retry_budgets=RetryBudgets(performance=0),
+            correctness_shapes=((2, 3), (4, 5)),
+        ),
     )
 
     result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
@@ -234,7 +238,7 @@ def test_orchestrator_repairs_after_correctness_failure() -> None:
             run_results=[*first_correctness, *repaired_correctness],
         ),
         store=store,
-        cfg=SynthesisConfig(),
+        cfg=SynthesisConfig(retry_budgets=RetryBudgets(performance=0)),
     )
 
     result = orchestrator.run(prompt="noop", reference=lambda x: x, target="sm_80")
@@ -303,7 +307,7 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
         ),
         store=store,
         cfg=SynthesisConfig(
-            retry_budgets=RetryBudgets(codegen=3),
+            retry_budgets=RetryBudgets(codegen=3, performance=0),
             performance_shape_n=256,
             benchmark_warmup_iterations=2,
             benchmark_timed_iterations=3,

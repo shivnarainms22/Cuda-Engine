@@ -269,7 +269,38 @@ def test_stage4_performance_records_failed_compile_in_warnings_and_continues() -
     assert any("attempt 1: compile failed" in w for w in report.warnings)
 
 
-def test_stage4_performance_skips_retry_when_initial_speedup_meets_target() -> None:
+def test_stage4_performance_enters_retry_loop_even_when_initial_meets_target() -> None:
+    """fast_1 lift: always try to push past initial speedup. Best-so-far protects winners.
+
+    Was previously 'skip retry when initial meets target' — that gate left plateau
+    kernels at exactly 1.00x because the loop never opened. Now we always enter.
+    """
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial 4x kernel")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=0.5, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 4.0x — already above target
+    same = BenchmarkResult(
+        ok=True, custom_ms=0.5, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50
+    )  # 4.0x — no improvement
+    gpu = MockGPURunner(
+        compile_results=[CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok")],
+        benchmark_results=[initial, same],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)],
+    )
+    llm = MockLLMClient([_llm_compile_response("// v2 no better")])
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _returned = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=1)
+
+    assert report.below_target is False
+    assert report.speedup_vs_torch_compile == 4.0  # best-so-far returned initial
+    assert llm.call_count == 1  # loop entered and ran the attempt
+
+
+def test_stage4_performance_skips_retry_when_llm_unavailable() -> None:
+    """Without an LLM, Stage 4 still runs the initial benchmark but doesn't retry."""
     store = InMemoryStore()
     artifact = _initial_artifact_in_store(store, "run123", "// initial")
     gpu = MockGPURunner(
@@ -277,15 +308,13 @@ def test_stage4_performance_skips_retry_when_initial_speedup_meets_target() -> N
             BenchmarkResult(ok=True, custom_ms=0.5, baseline_ms=2.0, warmup_iterations=10, timed_iterations=50),
         ],
     )
-    llm = MockLLMClient([])
     cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0)
-    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+    stage = Stage4Performance(llm=None, gpu=gpu, store=store, cfg=cfg)
 
     report, returned = stage.run(spec=_spec(), artifact=artifact, run_id="run123", retry_budget=3)
 
     assert report.below_target is False
     assert report.speedup_vs_torch_compile == 4.0
-    assert llm.call_count == 0
     assert returned is artifact
 
 

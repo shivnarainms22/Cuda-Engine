@@ -101,6 +101,8 @@ def _extract_json(text: str) -> str:
 def _normalize_kernel_spec_dict(data: object) -> None:
     if not isinstance(data, dict):
         return
+    if "optimization_priority" not in data:
+        data["optimization_priority"] = "balanced"
     for section in ("inputs", "outputs"):
         args = data.get(section)
         if not isinstance(args, list):
@@ -109,5 +111,7 @@ def _normalize_kernel_spec_dict(data: object) -> None:
             if not isinstance(arg, dict):
                 continue
             layout_hint = arg.get("layout_hint")
-            if layout_hint in {"contiguous", "c_contiguous", "strided_contiguous"}:
+            if layout_hint in {"contiguous", "c_contiguous", "strided_contiguous", "row-major"}:
                 arg["layout_hint"] = "row_major"
+            elif layout_hint == "col-major":
+                arg["layout_hint"] = "col_major"
