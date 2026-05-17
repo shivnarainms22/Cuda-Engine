@@ -52,8 +52,25 @@ def _load_payload(input_path: Path) -> tuple[list[Any], Any]:
     with input_path.open("rb") as f:
         raw = pickle.load(f)
     if isinstance(raw, dict):
-        return raw.get("inputs", []), raw.get("reference")
+        reference = raw.get("reference")
+        reference_path = raw.get("reference_path")
+        if reference is None and reference_path is not None:
+            reference = _load_reference_from_path(Path(reference_path))
+        return raw.get("inputs", []), reference
     return raw, None
+
+
+def _load_reference_from_path(path: Path) -> Any:
+    """Load the reference callable from a Python source file."""
+    spec = importlib.util.spec_from_file_location("_cuda_engine_child_reference", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return getattr(module, "REFERENCE", None) or getattr(module, "reference", None)
 
 
 def _run_forward(so_path: Path, inputs: list[Any]) -> Any:
@@ -144,22 +161,28 @@ def _measure_torch_compile_baseline(
 ) -> tuple[float | None, str | None]:
     """Time torch.compile(reference) on the given inputs.
 
+    Tries reduce-overhead (CUDA graphs) first, falls back to default inductor
+    mode if reduce-overhead fails (e.g. graph-break or shape restriction).
+
     Returns (baseline_ms, error_str). Exactly one of them is None.
     """
-    try:
-        compiled = torch.compile(reference, mode="reduce-overhead")
-        for _ in range(warmup_iterations):
-            compiled(*inputs)
-        _synchronize_if_cuda(torch, inputs)
-        baseline_ms = _time_callable_ms(
-            torch,
-            lambda: compiled(*inputs),
-            iterations=timed_iterations,
-            use_cuda_events=_has_cuda_inputs(inputs),
-        )
-        return baseline_ms, None
-    except Exception as exc:
-        return None, f"torch.compile baseline failed: {type(exc).__name__}: {exc}"
+    errors: list[str] = []
+    for mode in ("reduce-overhead", "default"):
+        try:
+            compiled = torch.compile(reference, mode=mode)
+            for _ in range(warmup_iterations):
+                compiled(*inputs)
+            _synchronize_if_cuda(torch, inputs)
+            baseline_ms = _time_callable_ms(
+                torch,
+                lambda _c=compiled: _c(*inputs),
+                iterations=timed_iterations,
+                use_cuda_events=_has_cuda_inputs(inputs),
+            )
+            return baseline_ms, None
+        except Exception as exc:
+            errors.append(f"mode={mode!r}: {type(exc).__name__}: {exc}")
+    return None, "torch.compile baseline failed: " + "; ".join(errors)
 
 
 def _time_callable_ms(torch: Any, action: Any, *, iterations: int, use_cuda_events: bool) -> float:

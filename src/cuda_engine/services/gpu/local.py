@@ -179,6 +179,7 @@ class LocalGPURunner(GPURunner):
         inputs: list[Any],
         *,
         reference: Callable[..., Any] | None = None,
+        reference_path: Path | None = None,
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
@@ -187,8 +188,12 @@ class LocalGPURunner(GPURunner):
         run_dir.mkdir(parents=True, exist_ok=True)
         input_path = run_dir / "inputs.pkl"
         output_path = run_dir / "benchmark.pkl"
+        # Prefer reference_path over pickling the callable to avoid PicklingError
+        # for dynamically-loaded reference functions.
+        _ref_path_str = str(reference_path) if reference_path is not None else None
+        _ref_callable = reference if reference_path is None else None
         with input_path.open("wb") as f:
-            pickle.dump({"inputs": inputs, "reference": reference}, f)
+            pickle.dump({"inputs": inputs, "reference": _ref_callable, "reference_path": _ref_path_str}, f)
 
         cmd = [
             sys.executable,

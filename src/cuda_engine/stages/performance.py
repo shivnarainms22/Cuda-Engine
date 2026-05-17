@@ -50,10 +50,13 @@ class Stage4Performance(Stage):
 
         benchmark_shape = _benchmark_shape(spec, total_elements=self.cfg.performance_shape_n)
         inputs = _make_inputs(spec, shape=benchmark_shape)
+        # Pass reference_path to avoid pickling a dynamically-loaded callable.
+        # inputs/reference.py is written by the orchestrator before Stage 4 runs.
+        _ref_path = self.store.run_dir(run_id) / "inputs" / "reference.py"
         benchmark = self.gpu.benchmark_kernel(
             artifact.kernel_so_path,
             inputs,
-            reference=reference,
+            reference_path=_ref_path if reference is not None else None,
             warmup_iterations=self.cfg.benchmark_warmup_iterations,
             timed_iterations=self.cfg.benchmark_timed_iterations,
         )

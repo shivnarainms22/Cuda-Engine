@@ -74,6 +74,7 @@ class GPURunner(ABC):
         inputs: list[Any],
         *,
         reference: Callable[..., Any] | None = None,
+        reference_path: Path | None = None,
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,

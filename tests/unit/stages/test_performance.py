@@ -85,6 +85,7 @@ def test_stage4_performance_uses_configured_benchmark_settings() -> None:
             "so_path": Path("kernel.so"),
             "input_shapes": [(256,), (256,)],
             "reference": None,
+            "reference_path": None,
             "warmup_iterations": 2,
             "timed_iterations": 3,
             "timeout_seconds": 60,
@@ -399,8 +400,11 @@ def test_stage4_retry_loop_reuses_cached_baseline() -> None:
         retry_budget=1, reference=_ref,
     )
 
-    assert gpu.benchmark_calls[0]["reference"] is _ref
+    # reference is passed as reference_path now (avoids pickle of dynamic callables)
+    assert gpu.benchmark_calls[0]["reference"] is None
+    assert gpu.benchmark_calls[0]["reference_path"] is not None
     assert gpu.benchmark_calls[1]["reference"] is None
+    assert gpu.benchmark_calls[1]["reference_path"] is None
     # Final speedup uses cached baseline 2.0 against retry custom_ms 1.0 → 2.0
     assert report.speedup_vs_torch_compile == 2.0
 
