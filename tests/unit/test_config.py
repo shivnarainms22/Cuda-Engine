@@ -14,8 +14,8 @@ def test_default_retry_budgets() -> None:
 def test_perf_target_defaults() -> None:
     config = SynthesisConfig()
 
-    assert config.perf_target_speedup_vs_torch_compile == 1.0
-    assert config.escalate_to_opus_on_bust is True
+    assert config.perf_target_speedup_vs_torch_compile == 1.05
+    assert config.escalate_to_opus_on_bust is False
 
 
 def test_benchmark_defaults_are_large_enough_for_gpu_timing() -> None:
@@ -35,9 +35,9 @@ def test_correctness_shape_grid_defaults_to_vector_smoke_shapes() -> None:
 def test_synthesis_config_has_opus_escalation_budgets() -> None:
     cfg = SynthesisConfig()
 
-    assert cfg.opus_retry_budget_codegen == 3
+    assert cfg.opus_retry_budget_codegen == 1
     assert cfg.opus_retry_budget_performance == 1
-    assert cfg.escalate_to_opus_on_bust is True
+    assert cfg.escalate_to_opus_on_bust is False
 
 
 def test_synthesis_config_opus_budgets_overridable() -> None:

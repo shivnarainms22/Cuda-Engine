@@ -15,8 +15,8 @@ class SynthesisConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     retry_budgets: RetryBudgets = Field(default_factory=RetryBudgets)
-    escalate_to_opus_on_bust: bool = True
-    perf_target_speedup_vs_torch_compile: float = 1.0
+    escalate_to_opus_on_bust: bool = False
+    perf_target_speedup_vs_torch_compile: float = 1.05
     correctness_rtol: float = 1e-3
     correctness_atol: float = 1e-3
     correctness_shapes: tuple[tuple[int, ...], ...] = ((0,), (1,), (127,), (128,), (1024,), (4097,))
@@ -27,6 +27,6 @@ class SynthesisConfig(BaseModel):
     benchmark_timed_iterations: int = 100
     sonnet_model: str = "claude-sonnet-4-6"
     opus_model: str = "claude-opus-4-7"
-    opus_retry_budget_codegen: int = 3
+    opus_retry_budget_codegen: int = 1
     opus_retry_budget_performance: int = 1
     request_timeout_seconds: int = 120

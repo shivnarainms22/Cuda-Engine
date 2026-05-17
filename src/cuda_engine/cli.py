@@ -207,10 +207,29 @@ def eval_suite(
         bool,
         typer.Option("--resume/--no-resume", help="Skip kernels with existing JSON results."),
     ] = True,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip the large-run confirmation prompt."),
+    ] = False,
 ) -> None:
     """Run an eval suite and write aggregate markdown/CSV results."""
     eval_runner = _load_eval_runner()
     suite_root = _resolve_suite_root(suite)
+
+    if not yes:
+        n = _count_suite_kernels(suite_root, _parse_only(only), limit)
+        if n > 5:
+            low = n * 0.10
+            high = n * 0.40
+            typer.echo(
+                f"About to synthesize {n} kernels "
+                f"(est. ${low:.0f}-${high:.0f} in API credits, opus escalation off by default).\n"
+                f"Tip: use --only k1,k2 to target specific kernels, or --yes to skip this prompt."
+            )
+            confirmed = typer.confirm("Continue?", default=False)
+            if not confirmed:
+                raise typer.Exit(code=0)
+
     summary = eval_runner.run_eval_suite(
         suite_root=suite_root,
         out_dir=out,
@@ -226,6 +245,17 @@ def eval_suite(
     typer.echo(f"Eval complete: {passed}/{len(summary.rows)} passed")
     typer.echo(f"CSV: {summary.csv_path}")
     typer.echo(f"Summary: {summary.markdown_path}")
+
+
+def _count_suite_kernels(suite_root: Path, only: set[str] | None, limit: int | None) -> int:
+    if not suite_root.exists():
+        return 0
+    names = sorted(d.name for d in suite_root.iterdir() if d.is_dir() and (d / "prompt.txt").exists())
+    if only is not None:
+        names = [n for n in names if n in only]
+    if limit is not None:
+        names = names[:limit]
+    return len(names)
 
 
 def _resolve_suite_root(suite: str) -> Path:

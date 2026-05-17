@@ -51,6 +51,7 @@ def test_orchestrator_happy_path_with_mocks() -> None:
             performance_shape_n=256,
             benchmark_warmup_iterations=2,
             benchmark_timed_iterations=3,
+            perf_target_speedup_vs_torch_compile=1.0,  # mock returns 1.0x; keep below_target=False
         ),
     )
 
@@ -311,6 +312,8 @@ def test_orchestrator_escalates_codegen_to_opus_on_bust() -> None:
             performance_shape_n=256,
             benchmark_warmup_iterations=2,
             benchmark_timed_iterations=3,
+            escalate_to_opus_on_bust=True,
+            opus_retry_budget_performance=0,  # test is about codegen escalation only
         ),
     )
 
