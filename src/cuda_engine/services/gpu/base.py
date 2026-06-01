@@ -28,7 +28,9 @@ class BenchmarkResult(BaseModel):
     ok: bool
     custom_ms: float = 0.0
     baseline_ms: float | None = None
+    baseline_mode: str | None = None
     baseline_error: str | None = None
+    eager_ms: float | None = None
     achieved_gbps: float | None = None
     stdout: str = ""
     stderr: str = ""

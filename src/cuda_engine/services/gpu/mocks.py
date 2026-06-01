@@ -73,6 +73,7 @@ class MockGPURunner(GPURunner):
                 ok=True,
                 custom_ms=1.0,
                 baseline_ms=1.0,
+                eager_ms=1.0,
                 warmup_iterations=warmup_iterations,
                 timed_iterations=timed_iterations,
             )

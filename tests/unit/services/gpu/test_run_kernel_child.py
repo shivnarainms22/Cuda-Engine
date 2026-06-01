@@ -127,3 +127,79 @@ def test_load_payload_dict_with_neither_reference_nor_path(tmp_path: Path) -> No
 
     assert inputs == [7]
     assert reference is None
+
+
+class _FakeCompiled:
+    """Stands in for torch.compile output; returns its mode when called so the
+    monkeypatched timer can map mode -> latency."""
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+
+    def __call__(self, *args: object) -> str:
+        return self.mode
+
+
+class _FakeTorch:
+    def __init__(self, fail_modes: tuple[str, ...] = ()) -> None:
+        self._fail_modes = fail_modes
+
+    def compile(self, reference: object, mode: str) -> _FakeCompiled:
+        if mode in self._fail_modes:
+            raise RuntimeError(f"compile boom for {mode}")
+        return _FakeCompiled(mode)
+
+
+def _patch_timer(monkeypatch, times: dict[str, float]) -> None:
+    def fake_time(torch, action, *, iterations, use_cuda_events):  # type: ignore[no-untyped-def]
+        return times[action()]  # action() returns the compiled mode
+
+    monkeypatch.setattr(_run_kernel_child, "_time_callable_ms", fake_time)
+
+
+def test_measure_baseline_selects_fastest_mode(monkeypatch) -> None:
+    """The baseline must be torch.compile's FASTEST mode, not the first that compiles."""
+    _patch_timer(monkeypatch, {
+        "default": 0.30,
+        "max-autotune-no-cudagraphs": 0.28,
+        "reduce-overhead": 0.76,
+    })
+
+    ms, mode, error = _run_kernel_child._measure_torch_compile_baseline(
+        _FakeTorch(), reference=lambda *a: None, inputs=[],
+        warmup_iterations=1, timed_iterations=1,
+    )
+
+    assert mode == "max-autotune-no-cudagraphs"
+    assert ms == 0.28
+    assert error is None
+
+
+def test_measure_baseline_skips_failed_mode_but_records_it(monkeypatch) -> None:
+    """A mode that fails to compile is recorded as a non-fatal error; the fastest
+    surviving mode still wins."""
+    _patch_timer(monkeypatch, {"default": 0.30, "reduce-overhead": 0.76})
+
+    ms, mode, error = _run_kernel_child._measure_torch_compile_baseline(
+        _FakeTorch(fail_modes=("max-autotune-no-cudagraphs",)),
+        reference=lambda *a: None, inputs=[],
+        warmup_iterations=1, timed_iterations=1,
+    )
+
+    assert mode == "default"
+    assert ms == 0.30
+    assert error is not None and "max-autotune-no-cudagraphs" in error
+
+
+def test_measure_baseline_all_modes_fail_returns_error(monkeypatch) -> None:
+    _patch_timer(monkeypatch, {})
+
+    ms, mode, error = _run_kernel_child._measure_torch_compile_baseline(
+        _FakeTorch(fail_modes=_run_kernel_child._BASELINE_MODES),
+        reference=lambda *a: None, inputs=[],
+        warmup_iterations=1, timed_iterations=1,
+    )
+
+    assert ms is None
+    assert mode is None
+    assert error is not None and "torch.compile baseline failed" in error

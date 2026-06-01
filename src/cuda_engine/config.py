@@ -16,13 +16,13 @@ class SynthesisConfig(BaseModel):
 
     retry_budgets: RetryBudgets = Field(default_factory=RetryBudgets)
     escalate_to_opus_on_bust: bool = False
-    perf_target_speedup_vs_torch_compile: float = 1.05
+    perf_target_speedup_vs_torch_compile: float = 1.0
     correctness_rtol: float = 1e-3
     correctness_atol: float = 1e-3
     correctness_shapes: tuple[tuple[int, ...], ...] = ((0,), (1,), (127,), (128,), (1024,), (4097,))
     nvcc_flags: tuple[str, ...] = ("-O3", "--use_fast_math")
     artifact_root: str | None = None
-    performance_shape_n: int = 1_048_576
+    performance_shape_n: int = 16_777_216
     benchmark_warmup_iterations: int = 10
     benchmark_timed_iterations: int = 100
     sonnet_model: str = "claude-sonnet-4-6"

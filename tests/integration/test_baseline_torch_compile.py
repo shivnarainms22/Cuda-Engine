@@ -52,8 +52,13 @@ def test_baseline_torch_compile_succeeds_against_real_gpu() -> None:
     assert result.ok, result.stderr
     assert result.custom_ms > 0
     assert result.baseline_ms is not None, f"baseline failed: {result.baseline_error}"
-    assert result.baseline_error is None
+    # Baseline is the fastest torch.compile mode; baseline_mode records which won.
+    # A single mode failing is non-fatal and is recorded in baseline_error, so we
+    # no longer require baseline_error to be None on success.
+    assert result.baseline_mode is not None
     assert 1e-3 <= result.baseline_ms <= 100.0
+    # eager reference is also timed for the vs-reference metric.
+    assert result.eager_ms is not None and result.eager_ms > 0
 
 
 @pytest.mark.integration

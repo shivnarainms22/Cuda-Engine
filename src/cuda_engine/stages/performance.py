@@ -77,6 +77,7 @@ class Stage4Performance(Stage):
             return report, artifact
 
         cached_baseline_ms = benchmark.baseline_ms
+        cached_eager_ms = benchmark.eager_ms
         speedup = _speedup(baseline_ms=cached_baseline_ms, custom_ms=benchmark.custom_ms)
         target = self.cfg.perf_target_speedup_vs_torch_compile
         warnings: list[str] = []
@@ -138,7 +139,9 @@ class Stage4Performance(Stage):
             notes.extend(opus_notes)
 
         report = PerformanceReport(
-            speedup_vs_reference=current_speedup,
+            speedup_vs_reference=_speedup(
+                baseline_ms=cached_eager_ms, custom_ms=current_benchmark.custom_ms
+            ),
             speedup_vs_torch_compile=current_speedup,
             achieved_gbps=current_benchmark.achieved_gbps,
             below_target=current_speedup is None or current_speedup < target,
@@ -381,7 +384,7 @@ def _format_perf_hints(
         )
     if benchmark.baseline_ms is not None and benchmark.custom_ms > benchmark.baseline_ms:
         hints.append(
-            f"Custom kernel ({benchmark.custom_ms:.3f}ms) is slower than the eager baseline "
+            f"Custom kernel ({benchmark.custom_ms:.3f}ms) is slower than the torch.compile baseline "
             f"({benchmark.baseline_ms:.3f}ms). The current implementation is leaving the "
             "main bottleneck unresolved."
         )

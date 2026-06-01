@@ -24,6 +24,7 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
                 ok=True,
                 custom_ms=0.25,
                 baseline_ms=1.0,
+                eager_ms=0.5,
                 achieved_gbps=512.0,
                 warmup_iterations=10,
                 timed_iterations=100,
@@ -38,15 +39,16 @@ def test_stage4_performance_uses_benchmark_result_and_writes_report() -> None:
         run_id="run123",
     )
 
-    assert report.speedup_vs_reference == 4.0
+    # vs torch.compile (the gate) uses baseline_ms; vs reference uses eager_ms — distinct now.
     assert report.speedup_vs_torch_compile == 4.0
+    assert report.speedup_vs_reference == 2.0
     assert report.achieved_gbps == 512.0
     assert report.below_target is False
     assert returned_artifact.kernel_so_path == Path("kernel.so")
-    assert b'"speedup_vs_reference": 4.0' in store._files[("run123", "stage4_performance/report.json")]
+    assert b'"speedup_vs_reference": 2.0' in store._files[("run123", "stage4_performance/report.json")]
     assert b'"warmup_iterations": 10' in store._files[("run123", "stage4_performance/benchmark.json")]
     assert b'"timed_iterations": 100' in store._files[("run123", "stage4_performance/benchmark.json")]
-    assert b'"performance_shape_n": 1048576' in store._files[
+    assert b'"performance_shape_n": 16777216' in store._files[
         ("run123", "stage4_performance/benchmark.json")
     ]
 
@@ -409,6 +411,38 @@ def test_stage4_retry_loop_reuses_cached_baseline() -> None:
     assert report.speedup_vs_torch_compile == 2.0
 
 
+def test_stage4_reports_vs_reference_from_cached_eager_after_retry() -> None:
+    """speedup_vs_reference uses the initial eager_ms against the best kernel's
+    custom_ms — distinct from the torch.compile speedup, and threaded through retries."""
+    store = InMemoryStore()
+    artifact = _initial_artifact_in_store(store, "run123", "// initial slow")
+    initial = BenchmarkResult(
+        ok=True, custom_ms=4.0, baseline_ms=2.0, eager_ms=3.0,
+        warmup_iterations=10, timed_iterations=50,
+    )  # vs tc: 0.5x triggers retry; eager_ms=3.0 cached
+    faster = BenchmarkResult(
+        ok=True, custom_ms=1.0, baseline_ms=None, eager_ms=None,
+        warmup_iterations=10, timed_iterations=50,
+    )  # retry benchmark has no baseline/eager (reference=None)
+    gpu = MockGPURunner(
+        compile_results=[CompileResult(ok=True, so_path=Path("/tmp/v2.so"), log="ok")],
+        benchmark_results=[initial, faster],
+        profile_results=[NsightMetrics(occupancy=0.5, regs_per_thread=64)],
+    )
+    llm = MockLLMClient([_llm_compile_response("// faster kernel")])
+    cfg = SynthesisConfig(perf_target_speedup_vs_torch_compile=1.0, opus_retry_budget_performance=0)
+    stage = Stage4Performance(llm=llm, gpu=gpu, store=store, cfg=cfg)
+
+    report, _ = stage.run(
+        spec=_spec(), artifact=artifact, run_id="run123", retry_budget=1, reference=lambda x: x
+    )
+
+    # vs torch.compile: cached baseline 2.0 / best custom 1.0 = 2.0
+    assert report.speedup_vs_torch_compile == 2.0
+    # vs reference: cached eager 3.0 / best custom 1.0 = 3.0
+    assert report.speedup_vs_reference == 3.0
+
+
 def test_format_perf_hints_flags_register_pressure_and_low_occupancy() -> None:
     metrics = NsightMetrics(occupancy=0.4, regs_per_thread=80, spill_bytes=64)
     benchmark = BenchmarkResult(
@@ -420,7 +454,7 @@ def test_format_perf_hints_flags_register_pressure_and_low_occupancy() -> None:
     assert any("Register pressure" in h for h in hints)
     assert any("occupancy" in h.lower() for h in hints)
     assert any("Spill bytes" in h for h in hints)
-    assert any("slower than the eager baseline" in h for h in hints)
+    assert any("slower than the torch.compile baseline" in h for h in hints)
 
 
 def test_format_perf_hints_flags_low_bandwidth_with_vectorization_guidance() -> None:
