@@ -141,13 +141,17 @@ Design document: [`docs/superpowers/specs/2026-04-26-cuda-synthesis-engine-desig
 
 ## Eval results
 
-The internal regression suite has 30 hand-curated kernels covering elementwise ops, reductions, and simple fused kernels. Headline numbers from the most recent eval run will be added to [`docs/milestones/M3-evidence.md`](docs/milestones/M3-evidence.md) once the pre-v1.0 baseline-measurement-fixed run completes on Colab A100.
+The internal regression suite has 30 hand-curated kernels covering elementwise ops, reductions, and simple fused kernels. All speedups are measured on an A100 (sm_80) against the **fastest** `torch.compile` mode (best of `default` / `max-autotune` / `reduce-overhead`) at N≈16M, so a win means beating torch.compile at its best.
 
-**Recent verified numbers (eval-runner-aware):**
-- Functional pass rate: 28/30 (94%) — two failures were external API credit exhaustion, not kernel correctness.
-- Stage 4 Nsight feedback demonstrated to improve speedup across multiple kernels (e.g., `bias_gelu_fp16` 0.955 → 0.987 across 3 attempts).
+**Internal suite — 30/30, A100, 2026-06-01** ([M3-evidence.md](docs/milestones/M3-evidence.md)):
+- Functional pass rate: **30/30 (100%)**.
+- Median speedup vs torch.compile: **1.04×**; p25: **1.00×**.
+- **fast_1: 24/30 (80%)** kernels strictly faster than torch.compile.
+- Biggest wins: `topk_fp32` 12.5× (inductor falls back to a slow sort), `masked_mean` 2.6×, `cumulative_max` 1.45×, `softmax_lastdim` 1.33×. As expected for bandwidth-bound elementwise ops, those sit at parity (torch.compile is already at the HBM roofline); the wins come from reductions/scans.
 
-A previous baseline measurement bug silently labeled ~20 kernels as "matches torch.compile" without actually measuring torch.compile (it was timing a plain CUDA add on 2-input kernels and defaulting to 1.0 for everything else). That's fixed as of commit `4845999`; honest fast_1 numbers from the next Colab run will land in `M3-evidence.md` and update this section.
+**KernelBench external subset** (12 unseen, in-scope level1 ops): 9/9 functional on the kernels run so far (remaining 3 pending a credit top-up).
+
+> An earlier baseline bug measured against `torch.compile`'s *slowest* mode (reduce-overhead) at too-small N, which inflated speedups (one kernel read 9.7× when the honest number is ~parity). Fixed in commit `21f3b2b`; all numbers above use the corrected best-mode baseline.
 
 ---
 

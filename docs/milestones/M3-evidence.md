@@ -431,6 +431,68 @@ Fix:
 - Added `pythonpath = ["."]` to `[tool.pytest.ini_options]` in `pyproject.toml`.
 - Added `evals/__init__.py` so the source-checkout eval runner is importable as a package in CI.
 
+---
+
+## Honest Baseline Re-run — 2026-06-01 (SUPERSEDES all numbers above)
+
+**Every speedup number above is invalid** — measured against a broken
+torch.compile baseline. Root cause found 2026-06-01:
+
+- The baseline used `mode="reduce-overhead"` (first-success) at `performance_shape_n=1M`.
+- On bandwidth-bound elementwise ops, reduce-overhead is **~2.6× slower** than
+  `default` (its CUDA-graph static-buffer copies add memory traffic), so the
+  engine was beating torch.compile's *worst* mode.
+- At N=1M, per-call dynamo dispatch overhead dominated the timing (5.1× inflation
+  at 1M vs 1.5× at 64M for `sigmoid_mul`). Net effect: `sigmoid_mul` reported
+  **9.69×** when the honest value is ~parity.
+- `speedup_vs_reference` and `speedup_vs_torch_compile` were aliased to the same
+  value (`performance.py`), so the two CSV columns were always identical.
+
+**Fix — commit `21f3b2b`** (175 unit tests + ruff + mypy green):
+
+- Baseline = the **fastest** of `{default, max-autotune-no-cudagraphs, reduce-overhead}`
+  with `torch._dynamo.reset()` between modes; winning mode recorded in `baseline_mode`.
+- Eager timed separately (`eager_ms`) so `speedup_vs_reference` is a real metric.
+- `performance_shape_n` 1M → 16M; `perf_target_speedup_vs_torch_compile` 1.05 → 1.0.
+
+Diagnostic (pure-torch, A100, `sigmoid_mul` reference) confirming the fix:
+
+```text
+N=64M | eager=0.494ms  default=0.297ms (~1290 GB/s ≈ HBM peak)  reduce-overhead=0.763ms
+```
+
+**Re-run — Colab A100, run `2026-06-01-191749`, full 30/30:**
+
+```text
+Pass rate: 30/30 (100.0%)
+Median speedup vs torch.compile: 1.04x
+P25 speedup vs torch.compile: 1.00x
+fast_1 kernels (>1.0x with measured baseline): 24/30
+External/stage/runner failures: 0
+```
+
+| v1 gate axis | Result | Bar | |
+|---|---|---|---|
+| Functional pass | 30/30 (100%) | ≥95% | ✓ |
+| Median speedup | 1.04× | ≥1.0× | ✓ |
+| p25 speedup | 1.00× | ≥0.7× | ✓ |
+| fast_1 | 24/30 (80%) | ≥30% | ✓ |
+
+**The internal suite clears the original aggressive v1 gate on every axis — no
+re-scope needed.** The earlier "fast_1 is an unreachable wall" conclusion was
+purely an artifact of the broken baseline.
+
+Per-kernel highlights: `topk_fp32` 12.47× (inductor topk falls back to a slow
+sort), `masked_mean` 2.57×, `cumulative_max` 1.45×, `softmax_lastdim` 1.33×,
+`l2_norm` 1.13×. Pattern matches roofline theory — pure elementwise sits at
+parity (torch.compile `default` is already at the HBM roofline), the wins come
+from reductions/scans/fused ops.
+
+Genuine codegen weak spots (real signal, not gate-blockers): `gelu_fp16` 0.67×
+and `rms_norm_fp16` 0.75× — odd, since `bias_gelu` (1.03×) and
+`rmsnorm_silu_fused` (1.04×) pass. `prefix_sum` 0.95× plus three at ~0.98–0.99×
+are within run-to-run noise.
+
 Verification:
 
 ```text
