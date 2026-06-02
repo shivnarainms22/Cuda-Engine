@@ -1,0 +1,1 @@
+Generate a CUDA kernel for the fp16 tanh-approximation GELU on a single input tensor x: out = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))). Elementwise, output shape equals input shape.

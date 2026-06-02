@@ -1,0 +1,1 @@
+Generate a CUDA kernel for the fp32 Frobenius norm of a 2-D input tensor x: out = sqrt(sum(x*x)) reduced over all elements to a single scalar.

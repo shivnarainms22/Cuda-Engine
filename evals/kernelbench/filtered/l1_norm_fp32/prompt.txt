@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 L1 normalization over the last dimension of a 2-D input tensor x: out = x / sum(|x|, dim=-1, keepdim=True). Output shape equals input shape.

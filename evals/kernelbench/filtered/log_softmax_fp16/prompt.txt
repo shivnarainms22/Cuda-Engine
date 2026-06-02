@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 log-softmax over the last dimension of a 2-D input tensor x: out = log_softmax(x, dim=-1). Output shape equals input shape.

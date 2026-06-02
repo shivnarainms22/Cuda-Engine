@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 Softplus activation on a single input tensor x: out = log(1 + exp(x)). Elementwise, output shape equals input shape.

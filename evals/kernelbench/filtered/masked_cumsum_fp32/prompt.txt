@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 masked cumulative sum over the last dimension of two equal-shape 2-D input tensors x and mask: out = cumsum(x * mask, dim=-1). Output shape equals input shape.

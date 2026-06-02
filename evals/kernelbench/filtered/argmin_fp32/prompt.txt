@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 argmin over the last dimension of a 2-D input tensor x: out = argmin(x, dim=-1). Output is an int64 tensor with the reduced (last) dimension removed.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 ELU activation on a single input tensor x: out = x if x > 0 else (exp(x) - 1). Elementwise, output shape equals input shape.
