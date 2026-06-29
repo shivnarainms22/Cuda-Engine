@@ -66,8 +66,11 @@ cuda-engine synthesize \
 # Inspect a previous run
 cuda-engine inspect <run_id>
 
-# Run the internal eval suite (30 kernels)
+# Run the internal eval suite (42 kernels)
 cuda-engine eval --suite internal --out evals/results/2026-05-12 --resume
+
+# Run the suite on a different provider (to benchmark models against each other)
+cuda-engine eval --suite internal --out evals/results/openai --model-id openai:gpt-4o
 ```
 
 `path/to/rms_norm.py` should define either a top-level `REFERENCE` variable or a top-level `reference()` function.
@@ -91,6 +94,26 @@ result = synthesize(
 ```
 
 See [`docs/cost.md`](docs/cost.md) for tuning retry budgets to bound API spend.
+
+**Choosing a provider per stage** (v1.1) — `stage_models` maps each of the five
+stages to a `"provider:model"` id (default: all `anthropic:claude-sonnet-4-6`):
+
+```python
+from cuda_engine.config import StageModels, SynthesisConfig
+
+config = SynthesisConfig(
+    stage_models=StageModels(
+        interview="openai:gpt-4o",          # cheap stage on a cheap model
+        codegen="anthropic:claude-sonnet-4-6",
+        performance="anthropic:claude-opus-4-7",
+        # ... correctness / polish
+    )
+)
+```
+
+Set the matching key in the environment (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
+or your OpenAI-compatible endpoint's key). A bare model id with no `provider:`
+prefix routes to Anthropic.
 
 ---
 
@@ -160,14 +183,13 @@ The internal regression suite has 30 hand-curated kernels covering elementwise o
 ### In scope for v1
 - **Kernel categories:** elementwise + simple fused (RMSNorm, layernorm, GELU/SiLU/sigmoid variants, GLU/SwiGLU/GEGLU fusions, dropout-fused) and reductions/scans (sum, mean, argmax, top-k, prefix-sum, masked-mean).
 - **Targets:** codegen for `sm_80` / `sm_90` / `sm_100`; runtime verification on `sm_80` only.
-- **LLM:** Anthropic Claude Sonnet 4.6 default, Opus 4.7 escalation. Prompt caching enabled.
-- **Eval suites:** 30-kernel internal regression + filtered KernelBench subset.
+- **LLM:** Anthropic Claude Sonnet 4.6 default, Opus 4.7 escalation, prompt caching. **Pluggable providers (v1.1):** OpenAI and Google Gemini have native adapters, and any OpenAI-API-compatible endpoint (OpenRouter, Together, Groq, vLLM, local models) works via a generic adapter — set per-stage via `stage_models`, or run the eval on one with `--model-id`. Claude stays the default with caching + tool use; providers that lack a feature degrade gracefully and the run records it.
+- **Eval suites:** 42-kernel internal regression + filtered KernelBench subset.
 
 ### Out of scope for v1
 - GEMM, matmul, attention kernels (CUTLASS and FlashAttention dominate; deferred to v2/v3).
 - Multi-GPU, multi-node, rack-scale orchestration.
 - Formal verification (SMT race-freedom proofs).
-- Cross-LLM-provider support (Anthropic-only behind a single seam).
 - Backward-pass kernel synthesis, autograd custom ops.
 - VS Code / IDE integrations.
 
