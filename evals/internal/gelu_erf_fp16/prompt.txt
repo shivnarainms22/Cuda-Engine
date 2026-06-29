@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 exact GELU activation using the error function: out = x * 0.5 * (1 + erf(x / sqrt(2))). Single input tensor x, fp16 in and out.

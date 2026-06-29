@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 elementwise maximum of two tensors x and y of the same shape: out = max(x, y). Two input tensors x and y, fp32.

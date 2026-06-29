@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 population variance along the last dimension of a 2-D tensor x of shape [B, D] (divide by D, i.e. unbiased=False): out[b] = mean over j of (x[b, j] - mean(x[b]))^2. Single input tensor x, fp32, output shape [B].

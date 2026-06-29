@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 CELU activation with alpha=1.0: out = max(0, x) + min(0, exp(x) - 1). Single input tensor x, fp16.

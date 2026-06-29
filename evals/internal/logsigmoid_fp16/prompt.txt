@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 LogSigmoid activation: out = log(sigmoid(x)) = -softplus(-x). Single input tensor x, fp16.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 HardSwish activation: out = x * relu6(x + 3) / 6, where relu6(v) = min(max(v, 0), 6). Single input tensor x, fp16.

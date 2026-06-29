@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 SELU activation: out = scale * (max(0, x) + min(0, alpha * (exp(x) - 1))) using the standard SELU constants scale=1.0507009873554805 and alpha=1.6732632423543772. Single input tensor x, fp16.

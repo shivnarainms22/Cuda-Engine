@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp16 Mish activation: out = x * tanh(softplus(x)), where softplus(v) = log(1 + exp(v)). Single input tensor x, fp16.

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for an fp32 inclusive prefix sum (cumulative sum) along the last dimension of a 2-D tensor x of shape [B, D]: out[b, j] = sum over k <= j of x[b, k]. Single input tensor x, fp32, output same shape [B, D].

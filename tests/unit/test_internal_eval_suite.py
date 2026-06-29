@@ -35,16 +35,30 @@ EXPECTED_KERNELS = {
     "softmax_numerator_fp16",
     "cumulative_max_fp32",
     "l2_norm_fp32",
+    # v1.1 additions (broaden provider-benchmark coverage; all in-scope)
+    "gelu_erf_fp16",
+    "hardswish_fp16",
+    "mish_fp16",
+    "celu_fp16",
+    "selu_fp16",
+    "hardsigmoid_fp16",
+    "tanhshrink_fp16",
+    "logsigmoid_fp16",
+    "maximum_fp32",
+    "hypot_fp32",
+    "cumsum_lastdim_fp32",
+    "var_lastdim_fp32",
 }
 
 SUITE_ROOT = Path(__file__).parents[2] / "evals" / "internal"
 REQUIRED_FILES = {"prompt.txt", "reference.py", "shapes.yaml", "notes.md"}
 
 
-def test_internal_eval_suite_has_expected_30_kernels() -> None:
+def test_internal_eval_suite_has_expected_kernels() -> None:
     kernel_dirs = {path.name for path in SUITE_ROOT.iterdir() if path.is_dir()}
 
     assert kernel_dirs == EXPECTED_KERNELS
+    assert len(EXPECTED_KERNELS) == 42
 
 
 def test_internal_eval_kernels_have_required_files_and_shapes() -> None:
@@ -71,7 +85,7 @@ def test_internal_eval_suite_is_discoverable_and_references_import() -> None:
     kernels = discover_kernels(SUITE_ROOT)
 
     assert {kernel.name for kernel in kernels} == EXPECTED_KERNELS
-    assert len(kernels) == 30
+    assert len(kernels) == 42
     assert all(callable(kernel.reference) for kernel in kernels)
     assert all(len(kernel.correctness_shapes) >= 3 for kernel in kernels)
 
