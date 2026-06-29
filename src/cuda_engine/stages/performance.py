@@ -348,10 +348,69 @@ def _benchmark_payload(benchmark: BenchmarkResult, *, cfg: SynthesisConfig) -> d
     return payload
 
 
+_LATENCY_BOUND_THRESHOLD = 60.0
+
+
+def classify_bound(metrics: NsightMetrics) -> str:
+    """Classify the perf bottleneck from Nsight signals.
+
+    Returns "latency", "bandwidth", "compute", or "unknown". Both memory and
+    compute below ~60% of peak indicates a latency/occupancy problem (the kernel
+    is starved for in-flight work); otherwise the higher of the two dominates.
+    """
+    mem = metrics.memory_throughput_pct
+    comp = metrics.compute_sm_pct
+    if mem is None or comp is None:
+        return "unknown"
+    if mem < _LATENCY_BOUND_THRESHOLD and comp < _LATENCY_BOUND_THRESHOLD:
+        return "latency"
+    return "bandwidth" if mem >= comp else "compute"
+
+
+def _bound_guidance(metrics: NsightMetrics) -> str | None:
+    """Targeted, bound-aware guidance — steers the repair away from the
+    occupancy-killing 'add more ILP' default when the kernel is latency-bound."""
+    bound = classify_bound(metrics)
+    if bound == "unknown":
+        return None
+    occ = f"{metrics.occupancy:.2f}" if metrics.occupancy is not None else "n/a"
+    waves = f"{metrics.waves_per_sm:.1f}" if metrics.waves_per_sm is not None else "n/a"
+    measured = (
+        f"(memory {metrics.memory_throughput_pct:.0f}%, "
+        f"compute {metrics.compute_sm_pct:.0f}%, occupancy {occ}, waves/SM {waves})"
+    )
+    if bound == "latency":
+        return (
+            f"MEASURED BOTTLENECK: latency-bound {measured}. Memory and compute are both well "
+            "below peak, so the kernel is starved for in-flight work — NOT limited by bandwidth "
+            "or ALU. Do NOT add elements-per-thread, wider vectors, or registers: that lowers "
+            "occupancy and makes a latency-bound kernel SLOWER. Instead RAISE occupancy and "
+            "memory-level parallelism — cut registers/thread, keep more resident warps, and size "
+            "the grid to a few full waves of max-occupancy blocks (avoid one giant grid or tiny "
+            "per-thread work)."
+        )
+    if bound == "bandwidth":
+        return (
+            f"MEASURED BOTTLENECK: bandwidth-bound {measured}. The kernel is near the memory "
+            "roofline, so the only way to beat torch.compile is to MOVE LESS MEMORY. For "
+            "reductions/normalization, cache reused inputs in registers or shared memory to "
+            "avoid re-reading the input (turn a two-pass read into one pass), and size the grid "
+            "to fill all SMs without a large partial-wave tail (several full waves, not <1)."
+        )
+    return (
+        f"MEASURED BOTTLENECK: compute-bound {measured}. Reduce instruction count — use fast-math "
+        "intrinsics where the tolerance allows, strength-reduce or hoist redundant math, avoid "
+        "recomputation, and consider lookup tables for expensive transcendentals."
+    )
+
+
 def _format_perf_hints(
     metrics: NsightMetrics, *, benchmark: BenchmarkResult
 ) -> list[str]:
     hints: list[str] = []
+    guidance = _bound_guidance(metrics)
+    if guidance is not None:
+        hints.append(guidance)
     if metrics.regs_per_thread is not None and metrics.regs_per_thread >= 64:
         hints.append(
             f"Register pressure is high ({metrics.regs_per_thread} regs/thread). "
