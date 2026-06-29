@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -14,8 +15,12 @@ from cuda_engine.models import (
     SynthesisResult,
 )
 from cuda_engine.services.gpu.base import GPURunner
+from cuda_engine.services.llm.anthropic import AnthropicClient
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.llm.capabilities import ProviderCapabilities
+from cuda_engine.services.llm.gemini_client import GeminiClient
+from cuda_engine.services.llm.openai_client import OpenAIClient
+from cuda_engine.services.llm.router import LLMRouter
 from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.base import BudgetExhaustedError
 from cuda_engine.stages.codegen import Stage2Codegen
@@ -25,6 +30,20 @@ from cuda_engine.stages.performance import Stage4Performance
 from cuda_engine.stages.polish import Stage5Polish
 
 T = TypeVar("T")
+
+
+def build_router(cfg: SynthesisConfig) -> LLMRouter:
+    """Build an LLMRouter from the current environment.
+
+    Always registers anthropic. Registers openai only when OPENAI_API_KEY is
+    present in the environment; gemini only when GEMINI_API_KEY is present.
+    """
+    providers: dict[str, LLMClient] = {"anthropic": AnthropicClient(cfg)}
+    if os.environ.get("OPENAI_API_KEY"):
+        providers["openai"] = OpenAIClient()
+    if os.environ.get("GEMINI_API_KEY"):
+        providers["gemini"] = GeminiClient()
+    return LLMRouter(providers)
 
 
 class Orchestrator:
@@ -59,7 +78,7 @@ class Orchestrator:
                 reference=reference,
                 target_arch=target,
                 run_id=run_id,
-                model=self.cfg.sonnet_model,
+                model=self.cfg.stage_models.interview,
             ),
         )
         artifact = _run_traced_stage(
@@ -171,6 +190,7 @@ class Orchestrator:
                 run_id=run_id,
                 retry_budget=self.cfg.retry_budgets.performance,
                 reference=reference,
+                model=self.cfg.stage_models.performance,
             ),
         )
         artifact = _run_traced_stage(
@@ -184,7 +204,7 @@ class Orchestrator:
                 performance=performance,
                 reference=reference,
                 run_id=run_id,
-                model=self.cfg.sonnet_model,
+                model=self.cfg.stage_models.polish,
                 correctness_shapes=self.cfg.correctness_shapes,
             ),
         )
@@ -216,10 +236,10 @@ def _run_codegen_with_escalation(
     cfg: SynthesisConfig,
     run_args: dict[str, Any],
 ) -> KernelArtifact:
-    """Run Stage2Codegen with Sonnet, escalating to Opus on BudgetExhaustedError."""
+    """Run Stage2Codegen with configured model, escalating to Opus on BudgetExhaustedError."""
     try:
         return Stage2Codegen(llm=llm, gpu=gpu, store=store).run(
-            **run_args, model=cfg.sonnet_model
+            **run_args, model=cfg.stage_models.codegen
         )
     except BudgetExhaustedError as bust:
         if not cfg.escalate_to_opus_on_bust or cfg.opus_retry_budget_codegen <= 0:
@@ -319,6 +339,8 @@ def _build_stage_trace(
         tokens_out=sum(response.tokens_out for response in responses),
         cache_read_tokens=sum(response.cache_read_tokens for response in responses),
         latency_seconds=reported_latency if reported_latency > 0 else time.time() - started_at,
+        provider=_provider_summary(responses),
+        degraded=_degraded_union(responses),
     )
 
 
@@ -330,6 +352,25 @@ def _model_summary(responses: list[LLMResponse]) -> str:
         if response.model not in models:
             models.append(response.model)
     return ", ".join(models)
+
+
+def _provider_summary(responses: list[LLMResponse]) -> str:
+    providers: list[str] = []
+    for response in responses:
+        if response.provider and response.provider not in providers:
+            providers.append(response.provider)
+    return ", ".join(providers)
+
+
+def _degraded_union(responses: list[LLMResponse]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for response in responses:
+        for item in response.degraded:
+            if item not in seen:
+                seen.add(item)
+                result.append(item)
+    return result
 
 
 def _build_report(

@@ -34,6 +34,8 @@ class StageTrace(BaseModel):
     tokens_out: int = 0
     cache_read_tokens: int = 0
     latency_seconds: float = 0.0
+    provider: str = ""
+    degraded: list[str] = Field(default_factory=list)
 
 
 class SynthesisReport(BaseModel):

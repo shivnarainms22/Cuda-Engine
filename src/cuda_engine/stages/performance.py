@@ -35,6 +35,7 @@ class Stage4Performance(Stage):
         run_id: str,
         retry_budget: int = 3,
         reference: Callable[..., Any] | None = None,
+        model: str | None = None,
     ) -> tuple[PerformanceReport, KernelArtifact]:
         if self.gpu is None or self.store is None:
             raise RuntimeError("Stage4Performance requires gpu and store services")
@@ -89,6 +90,7 @@ class Stage4Performance(Stage):
         current_benchmark = benchmark
         current_speedup = speedup
 
+        sonnet_model = model if model is not None else self.cfg.sonnet_model
         if self.llm is not None and retry_budget > 0:
             current_artifact, current_benchmark, current_speedup, retry_warnings, retry_notes = self._retry_loop(
                 spec=spec,
@@ -99,7 +101,7 @@ class Stage4Performance(Stage):
                 inputs=inputs,
                 run_id=run_id,
                 retry_budget=retry_budget,
-                model=self.cfg.sonnet_model,
+                model=sonnet_model,
                 attempt_offset=0,
                 baseline_ms=cached_baseline_ms,
             )

@@ -38,9 +38,10 @@ def test_synthesis_config_stage_models_defaults_to_factory() -> None:
 
 def test_stage_models_is_frozen() -> None:
     import pytest
+    from pydantic import ValidationError
 
     sm = StageModels()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         sm.interview = "openai:gpt-4"  # type: ignore[misc]
 
 
