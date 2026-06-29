@@ -153,6 +153,14 @@ def test_openai_client_complete_omits_tools_when_none() -> None:
     assert "tools" not in fake._recorded[0]
 
 
+def test_openai_client_complete_omits_tools_when_empty_list() -> None:
+    """An empty tools list must NOT be sent — OpenAI rejects tools=[]. """
+    fake = _fake_client(_oai_text_resp())
+    oai = OpenAIClient(client=fake)
+    oai.complete(system=[], messages=[], model="gpt-4o", tools=[])
+    assert "tools" not in fake._recorded[0]
+
+
 def test_openai_client_complete_latency_seconds_positive() -> None:
     fake = _fake_client(_oai_text_resp())
     oai = OpenAIClient(client=fake)

@@ -227,12 +227,14 @@ def from_openai_response(resp: Any) -> dict[str, Any]:
 
     tool_calls: list[dict[str, Any]] = []
     for tc in getattr(msg, "tool_calls", None) or []:
-        tool_calls.append(
-            {
-                "name": tc.function.name,
-                "input": json.loads(tc.function.arguments),
-            }
-        )
+        try:
+            arguments = json.loads(tc.function.arguments)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"OpenAI tool call '{tc.function.name}' returned malformed JSON "
+                f"arguments: {exc}"
+            ) from exc
+        tool_calls.append({"name": tc.function.name, "input": arguments})
 
     usage = resp.usage
     tokens_in: int = int(getattr(usage, "prompt_tokens", 0) or 0)
@@ -260,6 +262,11 @@ def from_openai_response(resp: Any) -> dict[str, Any]:
 def from_gemini_response(resp: Any) -> dict[str, Any]:
     """Parse a Gemini GenerateContentResponse (or SimpleNamespace mirror) into a
     normalised dict compatible with LLMResponse fields."""
+    if not resp.candidates:
+        raise ValueError(
+            "Gemini returned no candidates — response may have been blocked by "
+            "safety filters"
+        )
     parts = resp.candidates[0].content.parts
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
@@ -288,3 +295,30 @@ def from_gemini_response(resp: Any) -> dict[str, Any]:
         "tokens_out": tokens_out,
         "cache_read_tokens": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def has_cache_control(
+    system: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> bool:
+    """Return True if any block in system or messages carries a cache_control key.
+
+    Used by non-Anthropic adapters to record a ``degraded=["prompt_caching"]``
+    signal when the caller requested explicit prompt caching that the provider
+    does not honour.
+    """
+    for block in system:
+        if "cache_control" in block:
+            return True
+    for msg in messages:
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and "cache_control" in block:
+                    return True
+    return False

@@ -13,6 +13,7 @@ from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.llm.capabilities import ProviderCapabilities
 from cuda_engine.services.llm.translate import (
     from_openai_response,
+    has_cache_control,
     to_openai_messages,
     to_openai_tools,
 )
@@ -47,7 +48,7 @@ class OpenAIClient(LLMClient):
         max_tokens: int = 4096,
         temperature: float | None = None,
     ) -> LLMResponse:
-        degraded = ["prompt_caching"] if _has_cache_control(system, messages) else []
+        degraded = ["prompt_caching"] if has_cache_control(system, messages) else []
 
         started_at = time.time()
         oai_messages = to_openai_messages(system, messages)
@@ -58,7 +59,7 @@ class OpenAIClient(LLMClient):
             "messages": oai_messages,
             "max_tokens": max_tokens,
         }
-        if oai_tools is not None:
+        if oai_tools:
             kwargs["tools"] = oai_tools
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -77,20 +78,3 @@ class OpenAIClient(LLMClient):
             latency_seconds=time.time() - started_at,
             degraded=degraded,
         )
-
-
-def _has_cache_control(
-    system: list[dict[str, Any]],
-    messages: list[dict[str, Any]],
-) -> bool:
-    """Return True if any block in system or messages carries a cache_control key."""
-    for block in system:
-        if "cache_control" in block:
-            return True
-    for msg in messages:
-        content = msg.get("content", [])
-        if isinstance(content, list):
-            for block in content:
-                if "cache_control" in block:
-                    return True
-    return False

@@ -11,7 +11,11 @@ from typing import Any
 
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
 from cuda_engine.services.llm.capabilities import ProviderCapabilities
-from cuda_engine.services.llm.translate import from_gemini_response, to_gemini
+from cuda_engine.services.llm.translate import (
+    from_gemini_response,
+    has_cache_control,
+    to_gemini,
+)
 
 _GEMINI_CAPABILITIES = ProviderCapabilities(
     provider="gemini", prompt_caching=True, tool_use=True
@@ -45,12 +49,12 @@ class GeminiClient(LLMClient):
         max_tokens: int = 4096,
         temperature: float | None = None,
     ) -> LLMResponse:
+        degraded = ["prompt_caching"] if has_cache_control(system, messages) else []
         payload = to_gemini(system, messages, tools)
 
-        config: dict[str, Any] = {
-            "system_instruction": payload["system_instruction"],
-            "max_output_tokens": max_tokens,
-        }
+        config: dict[str, Any] = {"max_output_tokens": max_tokens}
+        if payload["system_instruction"]:
+            config["system_instruction"] = payload["system_instruction"]
         if temperature is not None:
             config["temperature"] = temperature
         if payload["tools"]:
@@ -73,4 +77,5 @@ class GeminiClient(LLMClient):
             tokens_out=parsed["tokens_out"],
             cache_read_tokens=parsed["cache_read_tokens"],
             latency_seconds=time.time() - started_at,
+            degraded=degraded,
         )

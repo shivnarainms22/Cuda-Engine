@@ -5,10 +5,13 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from cuda_engine.services.llm.base import ToolSpec
 from cuda_engine.services.llm.translate import (
     from_gemini_response,
     from_openai_response,
+    has_cache_control,
     to_gemini,
     to_openai_messages,
     to_openai_tools,
@@ -485,3 +488,51 @@ def test_from_gemini_response_returns_cache_read_tokens_key() -> None:
     resp = _gemini_text_resp()
     parsed = from_gemini_response(resp)
     assert "cache_read_tokens" in parsed
+
+
+# ---------------------------------------------------------------------------
+# Hardening: malformed / blocked responses + shared cache-control helper
+# ---------------------------------------------------------------------------
+
+
+def test_from_openai_response_malformed_tool_args_raises_value_error() -> None:
+    resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(
+                            function=SimpleNamespace(name="search", arguments="{not json")
+                        )
+                    ],
+                )
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+    with pytest.raises(ValueError, match="search"):
+        from_openai_response(resp)
+
+
+def test_from_gemini_response_empty_candidates_raises_value_error() -> None:
+    resp = SimpleNamespace(
+        candidates=[],
+        usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=0),
+    )
+    with pytest.raises(ValueError, match="no candidates"):
+        from_gemini_response(resp)
+
+
+def test_has_cache_control_detects_system_and_message_blocks() -> None:
+    assert has_cache_control([{"type": "text", "text": "x", "cache_control": {}}], []) is True
+    assert (
+        has_cache_control(
+            [],
+            [{"role": "user", "content": [{"type": "text", "text": "x", "cache_control": {}}]}],
+        )
+        is True
+    )
+    assert has_cache_control([{"type": "text", "text": "x"}], []) is False
+    # bare string content must not crash
+    assert has_cache_control([], [{"role": "user", "content": "plain"}]) is False
