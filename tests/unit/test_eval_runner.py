@@ -179,6 +179,8 @@ def test_run_eval_suite_writes_csv_markdown_and_per_kernel_json(tmp_path: Path) 
         "baseline_status",
         "artifacts_dir",
         "regression",
+        "provider",
+        "model_id",
     ]
     assert csv_rows[0]["kernel"] == "failed_kernel"
     assert csv_rows[0]["passed"] == "false"
