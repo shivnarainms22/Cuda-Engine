@@ -15,6 +15,7 @@ import yaml  # type: ignore[import-untyped]
 from cuda_engine import synthesize
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import SynthesisResult
+from cuda_engine.services.llm.router import parse_model_id
 
 SynthFn = Callable[..., SynthesisResult]
 ProgressFn = Callable[[str], None]
@@ -32,6 +33,8 @@ CSV_COLUMNS = [
     "baseline_status",
     "artifacts_dir",
     "regression",
+    "provider",
+    "model_id",
 ]
 
 
@@ -58,6 +61,8 @@ class EvalRow:
     failure_kind: str = ""
     baseline_status: str = ""
     regression: str = ""
+    provider: str = ""
+    model_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -175,6 +180,8 @@ def _run_kernel(
     config: SynthesisConfig,
     synthesize_fn: SynthFn,
 ) -> EvalRow:
+    model_id = config.stage_models.interview
+    provider, _ = parse_model_id(model_id)
     try:
         result = synthesize_fn(
             prompt=kernel.prompt,
@@ -196,6 +203,8 @@ def _run_kernel(
             below_target=None,
             artifacts_dir=str(config.artifact_root or ""),
             regression="",
+            provider=provider,
+            model_id=model_id,
         )
 
     performance = result.performance
@@ -221,6 +230,8 @@ def _run_kernel(
         artifacts_dir=result.artifacts_dir,
         baseline_status=baseline_status,
         regression="",
+        provider=provider,
+        model_id=model_id,
     )
 
 
@@ -407,6 +418,8 @@ def _row_to_csv(row: EvalRow) -> dict[str, str]:
         "baseline_status": row.baseline_status,
         "artifacts_dir": row.artifacts_dir,
         "regression": row.regression,
+        "provider": row.provider,
+        "model_id": row.model_id,
     }
 
 
@@ -445,6 +458,8 @@ def _row_from_json(path: Path) -> EvalRow:
         artifacts_dir=str(payload.get("artifacts_dir", "")),
         baseline_status=str(payload.get("baseline_status", "")),
         regression=str(payload.get("regression", "")),
+        provider=str(payload.get("provider", "")),
+        model_id=str(payload.get("model_id", "")),
     )
 
 

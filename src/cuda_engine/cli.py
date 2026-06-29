@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import typer
 
-from cuda_engine.config import SynthesisConfig
+from cuda_engine.config import StageModels, SynthesisConfig
 
 app = typer.Typer(help="CUDA synthesis engine CLI.")
 
@@ -207,6 +207,14 @@ def eval_suite(
         bool,
         typer.Option("--resume/--no-resume", help="Skip kernels with existing JSON results."),
     ] = True,
+    model_id: Annotated[
+        str | None,
+        typer.Option(
+            "--model-id",
+            help="Run every stage on this provider:model id (e.g. 'openai:gpt-4o', "
+            "'anthropic:claude-sonnet-4-6'). Run once per provider to benchmark them.",
+        ),
+    ] = None,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Skip the large-run confirmation prompt."),
@@ -215,14 +223,16 @@ def eval_suite(
     """Run an eval suite and write aggregate markdown/CSV results."""
     eval_runner = _load_eval_runner()
     suite_root = _resolve_suite_root(suite)
+    config = _eval_config(model_id)
 
     if not yes:
         n = _count_suite_kernels(suite_root, _parse_only(only), limit)
         if n > 5:
             low = n * 0.10
             high = n * 0.40
+            on = f" on {model_id}" if model_id else ""
             typer.echo(
-                f"About to synthesize {n} kernels "
+                f"About to synthesize {n} kernels{on} "
                 f"(est. ${low:.0f}-${high:.0f} in API credits, opus escalation off by default).\n"
                 f"Tip: use --only k1,k2 to target specific kernels, or --yes to skip this prompt."
             )
@@ -235,7 +245,7 @@ def eval_suite(
         out_dir=out,
         baseline_dir=baseline,
         target=target,
-        config=SynthesisConfig(),
+        config=config,
         only=_parse_only(only),
         limit=limit,
         resume=resume,
@@ -289,6 +299,20 @@ def _load_eval_runner() -> ModuleType:
         raise ModuleNotFoundError(
             "could not import evals.runner; run this command from a cuda-engine source checkout"
         ) from exc
+
+
+def _eval_config(model_id: str | None) -> SynthesisConfig:
+    """Build the eval config, routing every stage to ``model_id`` when given."""
+    if model_id is None:
+        return SynthesisConfig()
+    stage_models = StageModels(
+        interview=model_id,
+        codegen=model_id,
+        correctness=model_id,
+        performance=model_id,
+        polish=model_id,
+    )
+    return SynthesisConfig(stage_models=stage_models)
 
 
 def _parse_only(value: str | None) -> set[str] | None:
