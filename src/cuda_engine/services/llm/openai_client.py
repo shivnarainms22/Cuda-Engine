@@ -24,19 +24,35 @@ _OPENAI_CAPABILITIES = ProviderCapabilities(
 
 
 class OpenAIClient(LLMClient):
-    """Adapts LLMClient to OpenAI's chat completions API."""
+    """Adapts LLMClient to OpenAI's chat completions API.
 
-    def __init__(self, *, client: Any = None, api_key_env: str = "OPENAI_API_KEY") -> None:
+    Parameterised on ``provider``/``capabilities``/``base_url`` so it can also
+    back any OpenAI-API-compatible endpoint (see ``OpenAICompatibleClient``).
+    """
+
+    def __init__(
+        self,
+        *,
+        client: Any = None,
+        api_key_env: str = "OPENAI_API_KEY",
+        base_url: str | None = None,
+        provider: str = "openai",
+        capabilities: ProviderCapabilities | None = None,
+    ) -> None:
+        self._provider = provider
+        self._capabilities = capabilities or _OPENAI_CAPABILITIES
         if client is None:
             import openai  # lazy — only when not injected
 
-            self._client = openai.OpenAI(api_key=os.environ.get(api_key_env))
+            self._client = openai.OpenAI(
+                api_key=os.environ.get(api_key_env), base_url=base_url
+            )
         else:
             self._client = client
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return _OPENAI_CAPABILITIES
+        return self._capabilities
 
     def complete(
         self,
@@ -71,7 +87,7 @@ class OpenAIClient(LLMClient):
             text=parsed["text"],
             tool_calls=parsed["tool_calls"],
             model=model,
-            provider="openai",
+            provider=self._provider,
             tokens_in=parsed["tokens_in"],
             tokens_out=parsed["tokens_out"],
             cache_read_tokens=parsed["cache_read_tokens"],
