@@ -1,5 +1,17 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+_SONNET_ROUTED = "anthropic:claude-sonnet-4-6"
+
+
+class StageModels(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    interview: str = _SONNET_ROUTED
+    codegen: str = _SONNET_ROUTED
+    correctness: str = _SONNET_ROUTED
+    performance: str = _SONNET_ROUTED
+    polish: str = _SONNET_ROUTED
+
 
 class RetryBudgets(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -30,3 +42,4 @@ class SynthesisConfig(BaseModel):
     opus_retry_budget_codegen: int = 1
     opus_retry_budget_performance: int = 1
     request_timeout_seconds: int = 120
+    stage_models: StageModels = Field(default_factory=StageModels)
