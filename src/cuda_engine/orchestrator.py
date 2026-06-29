@@ -15,6 +15,7 @@ from cuda_engine.models import (
 )
 from cuda_engine.services.gpu.base import GPURunner
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
+from cuda_engine.services.llm.capabilities import ProviderCapabilities
 from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.base import BudgetExhaustedError
 from cuda_engine.stages.codegen import Stage2Codegen
@@ -245,6 +246,10 @@ class _TracingLLMClient(LLMClient):
     def __init__(self, inner: LLMClient) -> None:
         self._inner = inner
         self.responses: list[LLMResponse] = []
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._inner.capabilities
 
     def complete(
         self,
