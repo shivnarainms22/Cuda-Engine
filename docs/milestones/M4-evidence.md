@@ -9,7 +9,7 @@ backbone of this gate — see [M3-evidence.md](M3-evidence.md) for the fix detai
 | Requirement | Status | Evidence |
 |---|---|---|
 | Internal regression ≥95% functional, median ≥1.0×, p25 ≥0.7×, fast_1 ≥30% | ✅ **MET** | Run `2026-06-01-191749`: 30/30 (100%), median 1.04×, p25 1.00×, fast_1 24/30 (80%). All vs the *fastest* torch.compile mode at N=16M. |
-| KernelBench external subset ≥80% functional | 🟡 in progress | 12 hand-translated unseen in-scope fixtures (`9714c04`). Run `kernelbench-2026-06-02-015450`: 9/9 functional on kernels run; 3 (`reverse_cumsum`, `softplus`, `softsign`) stalled on credit exhaustion (last-3-consecutive `n/a` signature), not real failures. Resume after credit top-up → expect ≥10/12. |
+| KernelBench external subset ≥80% functional | ✅ **MET** | 12 hand-translated unseen in-scope fixtures (`9714c04`). Run `kernelbench-2026-06-02-015450` (completed 2026-06-28): **12/12 (100%)**, median 1.05×, p25 1.03×, fast_1 11/12 (92%). The 3 previously credit-stalled kernels re-ran clean: `reverse_cumsum_fp32` 1.86×, `softplus_fp16` 1.12×, `softsign_fp16` 1.01×. |
 | PR / nightly / pre-release CI all green | 🟡 partial | PR CI green through `9714c04` (175 unit tests, ruff, mypy). Nightly + pre-release `eval.yml` exist (M3/Task 5.8). |
 | `pip install` from TestPyPI on fresh Colab works end-to-end | ❌ pending | Task 5.10 — needs tag + publish. Local wheel build dry-run done (see below). |
 | Streamlit demo runs end-to-end | ✅ built | `examples/web_demo.py` (Task 5.3). |
@@ -27,7 +27,8 @@ needed once the baseline was measured honestly.
 ## KernelBench external subset
 
 12 unseen, in-scope level1 ops hand-translated into `evals/kernelbench/filtered/`
-(none overlap the internal 30). Per-kernel results from `kernelbench-2026-06-02-015450`:
+(none overlap the internal 30). Final per-kernel results from
+`kernelbench-2026-06-02-015450` (3 stalled kernels completed 2026-06-28):
 
 ```text
 argmin_fp32          PASS  1.05
@@ -39,15 +40,20 @@ log_softmax_fp16     PASS  1.31
 masked_cumsum_fp32   PASS  1.03   (2-input scan works)
 mingpt_gelu_fp16     PASS  1.03
 mse_loss_fp32        PASS  1.00   (2-input scalar reduction works)
-reverse_cumsum_fp32  PENDING (credit exhaustion, not a real failure)
-softplus_fp16        PENDING (credit exhaustion)
-softsign_fp16        PENDING (credit exhaustion)
+reverse_cumsum_fp32  PASS  1.86
+softplus_fp16        PASS  1.12
+softsign_fp16        PASS  1.01
 ```
 
-Functional: 9/9 of completed kernels. 7/9 strictly faster than torch.compile.
-Recovery after top-up: `cuda-engine eval --suite kernelbench --out "$OUT_DIR"
---only reverse_cumsum_fp32,softplus_fp16,softsign_fp16 --no-resume --yes`, then a
-plain `--resume` pass to regenerate the 12-row summary.
+Functional: 12/12. 10/12 strictly faster than torch.compile (l1_norm 0.94×,
+mse_loss 1.00× the two non-wins). Gate bar (≥80%) cleared at 100%.
+
+The 3 originally stalled kernels were recovered with
+`cuda-engine eval --suite kernelbench --out "$OUT_DIR"
+--only reverse_cumsum_fp32,softplus_fp16,softsign_fp16 --no-resume --yes`
+(`--no-resume` required because failed kernels write JSONs that a plain
+`--resume` would skip), followed by a credit-free `--resume` pass to regenerate
+the consolidated 12-row summary.
 
 ## Local wheel build dry-run (Task 5.10 de-risk, no network)
 
@@ -56,7 +62,8 @@ imports in a clean environment before any TestPyPI publish.
 
 ## Remaining to ship v1.0
 
-1. Top up credits → finish the 3 KernelBench kernels → confirm ≥10/12.
-2. Commit `evals/results/v1.0-<date>/` with both summaries.
+1. ✅ KernelBench 12/12 (done 2026-06-28) — both perf gates verified.
+2. Commit `evals/results/v1.0-2026-06-28/` with both summaries (internal
+   `2026-06-01-191749` + KernelBench `2026-06-02-015450`).
 3. Tag `v1.0`, build wheel, publish to **TestPyPI**, validate fresh-Colab install (Task 5.10).
 4. Merge `m3/perf-loop` → `main`.

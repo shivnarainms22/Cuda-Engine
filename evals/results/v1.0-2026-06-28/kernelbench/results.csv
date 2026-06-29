@@ -1,0 +1,13 @@
+kernel,passed,run_id,failed_stage,failure_reason,failure_kind,speedup_vs_torch_compile,speedup_vs_reference,below_target,baseline_status,artifacts_dir,regression
+argmin_fp32,true,b2f21b616070,,,,1.05,1.18,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/argmin_fp32/b2f21b616070,
+elu_fp16,true,4fbdcc1355e2,,,,1.05,1.04,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/elu_fp16/4fbdcc1355e2,
+frobenius_norm_fp32,true,7ee96e7640b0,,,,1.17,1.01,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/frobenius_norm_fp32/7ee96e7640b0,
+l1_norm_fp32,true,d2d09a55173c,,,,0.94,2.51,true,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/l1_norm_fp32/d2d09a55173c,
+leaky_relu_fp16,true,a8596c14e5e5,,,,1.12,1.03,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/leaky_relu_fp16/a8596c14e5e5,
+log_softmax_fp16,true,ca38b671080d,,,,1.31,1.62,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/log_softmax_fp16/ca38b671080d,
+masked_cumsum_fp32,true,bfd0e4baac30,,,,1.03,2.94,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/masked_cumsum_fp32/bfd0e4baac30,
+mingpt_gelu_fp16,true,4fb59d961ff1,,,,1.03,8.54,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/mingpt_gelu_fp16/4fb59d961ff1,
+mse_loss_fp32,true,c9950e44cb91,,,,1.00,3.07,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/mse_loss_fp32/c9950e44cb91,
+reverse_cumsum_fp32,true,90f0ab39a99b,,,,1.86,4.18,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/reverse_cumsum_fp32/90f0ab39a99b,
+softplus_fp16,true,47542b16981b,,,,1.12,1.57,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/softplus_fp16/47542b16981b,
+softsign_fp16,true,8d1d3f138a72,,,,1.01,3.26,false,ok,/content/drive/MyDrive/cuda-engine-evals/kernelbench-2026-06-02-015450/artifacts/softsign_fp16/8d1d3f138a72,
