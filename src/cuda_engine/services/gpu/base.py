@@ -46,6 +46,13 @@ class NsightMetrics(BaseModel):
     spill_bytes: int = 0
     achieved_bandwidth_gbps: float | None = None
     achieved_tflops: float | None = None
+    # Bottleneck signals (v1.1b) — let the perf-repair loop tell latency- from
+    # bandwidth- from compute-bound instead of defaulting to "add more ILP".
+    memory_throughput_pct: float | None = None
+    dram_throughput_pct: float | None = None
+    compute_sm_pct: float | None = None
+    waves_per_sm: float | None = None
+    sol_bottleneck: str = ""
     raw_csv: str = ""
 
 

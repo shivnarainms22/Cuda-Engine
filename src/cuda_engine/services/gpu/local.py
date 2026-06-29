@@ -374,6 +374,11 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
     occupancy: float | None = None
     regs_per_thread: int | None = None
     achieved_bandwidth_gbps: float | None = None
+    memory_throughput_pct: float | None = None
+    dram_throughput_pct: float | None = None
+    compute_sm_pct: float | None = None
+    waves_per_sm: float | None = None
+    sol_bottleneck: str = ""
     first_id: str | None = None
     for row in reader:
         row_id = row.get("ID", "")
@@ -385,6 +390,12 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
         metric = (row.get("Metric Name") or "").strip()
         unit = (row.get("Metric Unit") or "").strip()
         value = (row.get("Metric Value") or "").strip()
+
+        # Rule rows (e.g. the SOL bottleneck verdict) carry an empty Metric
+        # Value, so read them BEFORE the empty-value skip below.
+        if (row.get("Rule Name") or "").strip() == "SOLBottleneck" and not sol_bottleneck:
+            sol_bottleneck = (row.get("Rule Description") or "").strip()
+
         if not value:
             continue
         if section == "Occupancy" and metric == "Achieved Occupancy" and occupancy is None:
@@ -395,6 +406,19 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
             and regs_per_thread is None
         ):
             regs_per_thread = int(_parse_float(value))
+        elif section == "GPU Speed Of Light Throughput" and unit == "%":
+            if metric == "Memory Throughput" and memory_throughput_pct is None:
+                memory_throughput_pct = _parse_float(value)
+            elif metric == "DRAM Throughput" and dram_throughput_pct is None:
+                dram_throughput_pct = _parse_float(value)
+            elif metric == "Compute (SM) Throughput" and compute_sm_pct is None:
+                compute_sm_pct = _parse_float(value)
+        elif (
+            section == "Launch Statistics"
+            and metric == "Waves Per SM"
+            and waves_per_sm is None
+        ):
+            waves_per_sm = _parse_float(value)
         elif achieved_bandwidth_gbps is None:
             achieved_bandwidth_gbps = _parse_bandwidth_gbps(
                 section=section,
@@ -407,6 +431,11 @@ def parse_ncu_csv(csv_text: str) -> NsightMetrics:
         occupancy=occupancy,
         regs_per_thread=regs_per_thread,
         achieved_bandwidth_gbps=achieved_bandwidth_gbps,
+        memory_throughput_pct=memory_throughput_pct,
+        dram_throughput_pct=dram_throughput_pct,
+        compute_sm_pct=compute_sm_pct,
+        waves_per_sm=waves_per_sm,
+        sol_bottleneck=sol_bottleneck,
         raw_csv=csv_text,
     )
 
