@@ -23,9 +23,13 @@ def synthesize(
 
     cfg = config or SynthesisConfig()
     if _llm is None:
-        from cuda_engine.services.llm.anthropic import AnthropicClient
+        from cuda_engine.orchestrator import build_router
 
-        _llm = AnthropicClient(cfg=cfg)
+        # The orchestrator passes provider-prefixed model ids (e.g.
+        # "anthropic:claude-sonnet-4-6") from cfg.stage_models, so the default
+        # client must be the router that strips the prefix and dispatches by
+        # provider — not a raw AnthropicClient.
+        _llm = build_router(cfg)
     if _gpu is None:
         from cuda_engine.services.gpu.local import LocalGPURunner
 
