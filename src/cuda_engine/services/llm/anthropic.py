@@ -7,12 +7,21 @@ import anthropic
 
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
+from cuda_engine.services.llm.capabilities import ProviderCapabilities
+
+_ANTHROPIC_CAPABILITIES = ProviderCapabilities(
+    provider="anthropic", prompt_caching=True, tool_use=True
+)
 
 
 class AnthropicClient(LLMClient):
     def __init__(self, cfg: SynthesisConfig | None = None) -> None:
         self.cfg = cfg or SynthesisConfig()
         self.client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return _ANTHROPIC_CAPABILITIES
 
     def complete(
         self,
@@ -56,6 +65,7 @@ class AnthropicClient(LLMClient):
             text="\n".join(part for part in text_parts if part),
             tool_calls=tool_calls,
             model=str(getattr(response, "model", model)),
+            provider="anthropic",
             tokens_in=int(getattr(usage, "input_tokens", 0) if usage is not None else 0),
             tokens_out=int(getattr(usage, "output_tokens", 0) if usage is not None else 0),
             cache_read_tokens=int(

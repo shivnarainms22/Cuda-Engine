@@ -1,6 +1,9 @@
 from typing import Any
 
 from cuda_engine.services.llm.base import LLMClient, LLMResponse, ToolSpec
+from cuda_engine.services.llm.capabilities import ProviderCapabilities
+
+_MOCK_CAPABILITIES = ProviderCapabilities(provider="mock")
 
 
 class MockLLMClient(LLMClient):
@@ -8,6 +11,10 @@ class MockLLMClient(LLMClient):
         self._responses = list(responses)
         self.call_count = 0
         self.calls: list[dict[str, Any]] = []
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return _MOCK_CAPABILITIES
 
     def complete(
         self,
@@ -35,4 +42,6 @@ class MockLLMClient(LLMClient):
         self.call_count += 1
         if isinstance(next_response, LLMResponse):
             return next_response
-        return LLMResponse(text=next_response, model="mock", tokens_in=10, tokens_out=10)
+        return LLMResponse(
+            text=next_response, model="mock", provider="mock", tokens_in=10, tokens_out=10
+        )

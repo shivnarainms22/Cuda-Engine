@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from cuda_engine.services.llm.capabilities import ProviderCapabilities
 
 
 class ToolSpec(BaseModel):
@@ -18,9 +22,16 @@ class LLMResponse(BaseModel):
     tokens_out: int = 0
     cache_read_tokens: int = 0
     latency_seconds: float = 0.0
+    provider: str = ""
+    degraded: list[str] = Field(default_factory=list)
 
 
 class LLMClient(ABC):
+    @property
+    @abstractmethod
+    def capabilities(self) -> ProviderCapabilities:
+        raise NotImplementedError
+
     @abstractmethod
     def complete(
         self,
