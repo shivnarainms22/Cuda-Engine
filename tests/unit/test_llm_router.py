@@ -53,12 +53,18 @@ def test_router_unknown_provider_raises_key_error() -> None:
 
 
 def test_router_capabilities_returns_anthropic_provider_caps() -> None:
-    anthropic_mock = MockLLMClient(responses=[])
-    openai_mock = MockLLMClient(responses=[])
+    from cuda_engine.services.llm.capabilities import ProviderCapabilities
+
+    # Give anthropic mock a distinct sentinel so we can verify it—not openai—was chosen
+    anthropic_mock = MockLLMClient(
+        responses=[],
+        capabilities=ProviderCapabilities(provider="mock", max_context=12345),
+    )
+    openai_mock = MockLLMClient(responses=[])  # default max_context=200_000
     router = LLMRouter(providers={"anthropic": anthropic_mock, "openai": openai_mock})
 
     caps = router.capabilities
-    assert caps.provider == "mock"  # MockLLMClient.capabilities.provider
+    assert caps.max_context == 12345  # sentinel proves anthropic, not openai, was chosen
 
 
 def test_router_capabilities_falls_back_to_first_if_no_anthropic() -> None:
@@ -67,6 +73,11 @@ def test_router_capabilities_falls_back_to_first_if_no_anthropic() -> None:
 
     caps = router.capabilities
     assert caps.provider == "mock"
+
+
+def test_router_raises_value_error_for_empty_providers() -> None:
+    with pytest.raises(ValueError, match="at least one provider"):
+        LLMRouter(providers={})
 
 
 def test_router_passes_kwargs_to_provider() -> None:

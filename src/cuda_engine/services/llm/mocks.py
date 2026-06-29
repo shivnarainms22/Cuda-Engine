@@ -7,14 +7,19 @@ _MOCK_CAPABILITIES = ProviderCapabilities(provider="mock")
 
 
 class MockLLMClient(LLMClient):
-    def __init__(self, responses: list[str | LLMResponse]) -> None:
+    def __init__(
+        self,
+        responses: list[str | LLMResponse],
+        capabilities: ProviderCapabilities | None = None,
+    ) -> None:
         self._responses = list(responses)
+        self._capabilities = capabilities if capabilities is not None else _MOCK_CAPABILITIES
         self.call_count = 0
         self.calls: list[dict[str, Any]] = []
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return _MOCK_CAPABILITIES
+        return self._capabilities
 
     def complete(
         self,

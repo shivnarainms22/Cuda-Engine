@@ -22,6 +22,8 @@ class LLMRouter(LLMClient):
     """Routes ``complete`` calls to the appropriate provider based on the model id prefix."""
 
     def __init__(self, providers: dict[str, LLMClient]) -> None:
+        if not providers:
+            raise ValueError("LLMRouter requires at least one provider")
         self._providers = providers
 
     @property
