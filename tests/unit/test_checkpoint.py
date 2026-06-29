@@ -1,8 +1,4 @@
-import pytest
-from pydantic import ValidationError
-
 from cuda_engine.checkpoint import Checkpoint, compute_fingerprint
-
 
 # --- compute_fingerprint ---
 
