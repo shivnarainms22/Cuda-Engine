@@ -6,10 +6,13 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from cuda_engine.checkpoint import Checkpoint, compute_fingerprint
 from cuda_engine.config import SynthesisConfig
 from cuda_engine.models import (
     CorrectnessReport,
     KernelArtifact,
+    KernelSpec,
+    PerformanceReport,
     StageTrace,
     SynthesisReport,
     SynthesisResult,
@@ -60,8 +63,34 @@ class Orchestrator:
         self.store = store
         self.cfg = cfg
 
-    def run(self, *, prompt: str, reference: Callable[..., Any], target: str) -> SynthesisResult:
-        run_id = self.store.new_run()
+    def run(
+        self,
+        *,
+        prompt: str,
+        reference: Callable[..., Any],
+        target: str,
+        resume_run_id: str | None = None,
+    ) -> SynthesisResult:
+        fingerprint = compute_fingerprint(
+            prompt=prompt,
+            reference_src=_reference_source(reference),
+            target=target,
+        )
+
+        if resume_run_id is not None:
+            run_id = resume_run_id
+            checkpoint, loaded_spec, loaded_artifact, loaded_correctness, loaded_performance = (
+                self._load_resume_state(run_id, fingerprint=fingerprint)
+            )
+        else:
+            run_id = self.store.new_run()
+            checkpoint = Checkpoint(inputs_fingerprint=fingerprint)
+            loaded_spec = None
+            loaded_artifact = None
+            loaded_correctness = None
+            loaded_performance = None
+
+        completed = set(checkpoint.completed_stages)
         started_at = time.time()
         llm = _TracingLLMClient(self.llm)
         stage_traces: list[StageTrace] = []
@@ -69,63 +98,64 @@ class Orchestrator:
         self.store.write_json(run_id, "inputs/config.json", self.cfg)
         self.store.write_text(run_id, "inputs/reference.py", _reference_source(reference))
 
-        spec = _run_traced_stage(
-            stage_traces,
-            llm,
-            "interview",
-            lambda: Stage1Interview(llm=llm, store=self.store).run(
-                prompt=prompt,
-                reference=reference,
-                target_arch=target,
+        # Fast-path: everything already completed on a previous run
+        if "polish" in completed:
+            assert loaded_spec is not None
+            assert loaded_artifact is not None
+            assert loaded_correctness is not None
+            assert loaded_performance is not None
+            report = _build_report(
                 run_id=run_id,
-                model=self.cfg.stage_models.interview,
-            ),
-        )
-        artifact = _run_traced_stage(
-            stage_traces,
-            llm,
-            "codegen",
-            lambda: _run_codegen_with_escalation(
-                llm=llm,
-                gpu=self.gpu,
-                store=self.store,
-                cfg=self.cfg,
-                run_args={
-                    "spec": spec,
-                    "run_id": run_id,
-                    "retry_budget": self.cfg.retry_budgets.codegen,
-                },
-            ),
-        )
-        correctness = _run_traced_stage(
-            stage_traces,
-            llm,
-            "correctness",
-            lambda: Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
-                spec=spec,
-                artifact=artifact,
-                reference=reference,
-                run_id=run_id,
-                retry_budget=self.cfg.retry_budgets.correctness,
-                correctness_shapes=self.cfg.correctness_shapes,
-            ),
-            succeeded=lambda report: report.passed,
-        )
-        for repair_attempt in range(1, self.cfg.retry_budgets.correctness + 1):
-            if correctness.passed:
-                break
-            repair_dir = f"stage3_repair/attempt_{repair_attempt:02d}"
-            self.store.write_json(
-                run_id,
-                f"{repair_dir}/correctness_report.json",
-                correctness.model_dump(mode="json"),
+                spec_name=loaded_spec.name,
+                stage_traces=stage_traces,
+                wall_time_seconds=time.time() - started_at,
+                warnings=["below perf target"] if loaded_performance.below_target else [],
             )
+            result = SynthesisResult.ok(
+                run_id=run_id,
+                artifacts_dir=str(self.store.run_dir(run_id)),
+                report=report,
+                correctness=loaded_correctness,
+                performance=loaded_performance,
+                kernel_callable=None,
+            )
+            _write_result_report(self.store, result)
+            return result
 
-            def repair_action(
-                correctness_report: CorrectnessReport = correctness,
-                repair_prefix: str = repair_dir,
-            ) -> KernelArtifact:
-                return _run_codegen_with_escalation(
+        # --- Stage 1: Interview ---
+        if "interview" in completed and loaded_spec is not None:
+            spec = loaded_spec
+        else:
+            spec = _run_traced_stage(
+                stage_traces,
+                llm,
+                "interview",
+                lambda: Stage1Interview(llm=llm, store=self.store).run(
+                    prompt=prompt,
+                    reference=reference,
+                    target_arch=target,
+                    run_id=run_id,
+                    model=self.cfg.stage_models.interview,
+                ),
+            )
+            checkpoint.completed_stages.append("interview")
+            checkpoint.objects["spec"] = spec.model_dump(mode="json")
+            self.store.write_json(run_id, "checkpoint.json", checkpoint.model_dump(mode="json"))
+
+        # --- Stages 2+3: Codegen + Correctness (including repair loop) ---
+        if (
+            "correctness" in completed
+            and loaded_artifact is not None
+            and loaded_correctness is not None
+        ):
+            artifact: KernelArtifact = loaded_artifact
+            correctness: CorrectnessReport = loaded_correctness
+        else:
+            artifact = _run_traced_stage(
+                stage_traces,
+                llm,
+                "codegen",
+                lambda: _run_codegen_with_escalation(
                     llm=llm,
                     gpu=self.gpu,
                     store=self.store,
@@ -134,65 +164,124 @@ class Orchestrator:
                         "spec": spec,
                         "run_id": run_id,
                         "retry_budget": self.cfg.retry_budgets.codegen,
-                        "repair_context": correctness_report,
-                        "artifact_prefix": f"{repair_prefix}/codegen",
                     },
-                )
-
-            artifact = _run_traced_stage(
-                stage_traces,
-                llm,
-                "codegen_repair",
-                repair_action,
+                ),
             )
-
-            def correctness_action(candidate: KernelArtifact = artifact) -> CorrectnessReport:
-                return Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
-                    spec=spec,
-                    artifact=candidate,
-                    reference=reference,
-                    run_id=run_id,
-                    retry_budget=self.cfg.retry_budgets.correctness,
-                    correctness_shapes=self.cfg.correctness_shapes,
-                )
-
             correctness = _run_traced_stage(
                 stage_traces,
                 llm,
                 "correctness",
-                correctness_action,
+                lambda: Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
+                    spec=spec,
+                    artifact=artifact,
+                    reference=reference,
+                    run_id=run_id,
+                    retry_budget=self.cfg.retry_budgets.correctness,
+                    correctness_shapes=self.cfg.correctness_shapes,
+                ),
                 succeeded=lambda report: report.passed,
             )
-        if not correctness.passed:
-            result = SynthesisResult.failed(
-                stage=3,
-                reason="correctness check failed",
-                run_id=run_id,
-                artifacts_dir=str(self.store.run_dir(run_id)),
-                report=_build_report(
-                    run_id=run_id,
-                    spec_name=spec.name,
-                    stage_traces=stage_traces,
-                    wall_time_seconds=time.time() - started_at,
-                ),
-                correctness=correctness,
-            )
-            _write_result_report(self.store, result)
-            return result
+            for repair_attempt in range(1, self.cfg.retry_budgets.correctness + 1):
+                if correctness.passed:
+                    break
+                repair_dir = f"stage3_repair/attempt_{repair_attempt:02d}"
+                self.store.write_json(
+                    run_id,
+                    f"{repair_dir}/correctness_report.json",
+                    correctness.model_dump(mode="json"),
+                )
 
-        performance, artifact = _run_traced_stage(
-            stage_traces,
-            llm,
-            "performance",
-            lambda: Stage4Performance(llm=llm, gpu=self.gpu, store=self.store, cfg=self.cfg).run(
-                spec=spec,
-                artifact=artifact,
-                run_id=run_id,
-                retry_budget=self.cfg.retry_budgets.performance,
-                reference=reference,
-                model=self.cfg.stage_models.performance,
-            ),
-        )
+                def repair_action(
+                    correctness_report: CorrectnessReport = correctness,
+                    repair_prefix: str = repair_dir,
+                ) -> KernelArtifact:
+                    return _run_codegen_with_escalation(
+                        llm=llm,
+                        gpu=self.gpu,
+                        store=self.store,
+                        cfg=self.cfg,
+                        run_args={
+                            "spec": spec,
+                            "run_id": run_id,
+                            "retry_budget": self.cfg.retry_budgets.codegen,
+                            "repair_context": correctness_report,
+                            "artifact_prefix": f"{repair_prefix}/codegen",
+                        },
+                    )
+
+                artifact = _run_traced_stage(
+                    stage_traces,
+                    llm,
+                    "codegen_repair",
+                    repair_action,
+                )
+
+                def correctness_action(candidate: KernelArtifact = artifact) -> CorrectnessReport:
+                    return Stage3Correctness(llm=llm, gpu=self.gpu, store=self.store).run(
+                        spec=spec,
+                        artifact=candidate,
+                        reference=reference,
+                        run_id=run_id,
+                        retry_budget=self.cfg.retry_budgets.correctness,
+                        correctness_shapes=self.cfg.correctness_shapes,
+                    )
+
+                correctness = _run_traced_stage(
+                    stage_traces,
+                    llm,
+                    "correctness",
+                    correctness_action,
+                    succeeded=lambda report: report.passed,
+                )
+
+            if not correctness.passed:
+                result = SynthesisResult.failed(
+                    stage=3,
+                    reason="correctness check failed",
+                    run_id=run_id,
+                    artifacts_dir=str(self.store.run_dir(run_id)),
+                    report=_build_report(
+                        run_id=run_id,
+                        spec_name=spec.name,
+                        stage_traces=stage_traces,
+                        wall_time_seconds=time.time() - started_at,
+                    ),
+                    correctness=correctness,
+                )
+                _write_result_report(self.store, result)
+                return result
+
+            checkpoint.completed_stages.append("correctness")
+            checkpoint.objects["artifact"] = artifact.model_dump(mode="json")
+            checkpoint.objects["correctness"] = correctness.model_dump(mode="json")
+            self.store.write_json(run_id, "checkpoint.json", checkpoint.model_dump(mode="json"))
+
+        # --- Stage 4: Performance ---
+        if "performance" in completed and loaded_performance is not None:
+            performance: PerformanceReport = loaded_performance
+            # artifact is already the perf-era artifact loaded from checkpoint
+        else:
+            performance, artifact = _run_traced_stage(
+                stage_traces,
+                llm,
+                "performance",
+                lambda: Stage4Performance(
+                    llm=llm, gpu=self.gpu, store=self.store, cfg=self.cfg
+                ).run(
+                    spec=spec,
+                    artifact=artifact,
+                    run_id=run_id,
+                    retry_budget=self.cfg.retry_budgets.performance,
+                    reference=reference,
+                    model=self.cfg.stage_models.performance,
+                ),
+            )
+            checkpoint.completed_stages.append("performance")
+            checkpoint.objects["performance"] = performance.model_dump(mode="json")
+            checkpoint.objects["artifact"] = artifact.model_dump(mode="json")
+            self.store.write_json(run_id, "checkpoint.json", checkpoint.model_dump(mode="json"))
+
+        # --- Stage 5: Polish ---
         artifact = _run_traced_stage(
             stage_traces,
             llm,
@@ -208,6 +297,9 @@ class Orchestrator:
                 correctness_shapes=self.cfg.correctness_shapes,
             ),
         )
+        checkpoint.completed_stages.append("polish")
+        checkpoint.objects["artifact"] = artifact.model_dump(mode="json")
+        self.store.write_json(run_id, "checkpoint.json", checkpoint.model_dump(mode="json"))
 
         report = _build_report(
             run_id=run_id,
@@ -226,6 +318,87 @@ class Orchestrator:
         )
         _write_result_report(self.store, result)
         return result
+
+    def _load_resume_state(
+        self,
+        run_id: str,
+        *,
+        fingerprint: str,
+    ) -> tuple[
+        Checkpoint,
+        KernelSpec | None,
+        KernelArtifact | None,
+        CorrectnessReport | None,
+        PerformanceReport | None,
+    ]:
+        """Load and validate a checkpoint for resumption.
+
+        Raises FileNotFoundError if checkpoint.json is missing, ValueError if the
+        inputs fingerprint has changed since the original run.  Applies graceful
+        degrade: if a completed-stage artifact file is no longer accessible, the
+        affected stage (and all later ones) are dropped from ``completed_stages``.
+        """
+        try:
+            cp_data = self.store.read_json(run_id, "checkpoint.json")
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Cannot resume run {run_id!r}: checkpoint.json not found. "
+                "The run may not exist or was interrupted before any stage completed."
+            ) from None
+
+        stored = Checkpoint.model_validate(cp_data)
+
+        if stored.inputs_fingerprint != fingerprint:
+            raise ValueError(
+                f"Cannot resume run {run_id!r}: inputs have changed since the original run "
+                "(fingerprint mismatch). Start a fresh run instead."
+            )
+
+        objects = stored.objects
+        completed: list[str] = list(stored.completed_stages)
+
+        spec: KernelSpec | None = None
+        artifact: KernelArtifact | None = None
+        correctness: CorrectnessReport | None = None
+        performance: PerformanceReport | None = None
+
+        if "interview" in completed and "spec" in objects:
+            spec = KernelSpec.model_validate(objects["spec"])
+
+        if "correctness" in completed and "artifact" in objects:
+            candidate = KernelArtifact.model_validate(objects["artifact"])
+            if _artifact_accessible(candidate, run_id, self.store):
+                artifact = candidate
+                if "correctness" in objects:
+                    correctness = CorrectnessReport.model_validate(objects["correctness"])
+            else:
+                # Artifact file missing: demote back to post-interview only
+                completed = [s for s in completed if s == "interview"]
+
+        if "performance" in completed and "performance" in objects:
+            performance = PerformanceReport.model_validate(objects["performance"])
+
+        return (
+            Checkpoint(
+                inputs_fingerprint=fingerprint,
+                completed_stages=completed,
+                objects=objects,
+            ),
+            spec,
+            artifact,
+            correctness,
+            performance,
+        )
+
+
+def _artifact_accessible(artifact: KernelArtifact, run_id: str, store: ArtifactStore) -> bool:
+    """Return True if the artifact's .cu source is readable through the store."""
+    path_key = artifact.kernel_cu_path.as_posix().replace("\\", "/")
+    marker = f"<memory>/{run_id}/"
+    if marker in path_key:
+        rel_path = path_key.split(marker, 1)[1]
+        return store.exists(run_id, rel_path)
+    return artifact.kernel_cu_path.exists()
 
 
 def _run_codegen_with_escalation(
