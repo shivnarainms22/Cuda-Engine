@@ -273,6 +273,7 @@ def _resolve_suite_root(suite: str) -> Path:
     known: dict[str, Path] = {
         "internal": Path("evals") / "internal",
         "kernelbench": Path("evals") / "kernelbench" / "filtered",
+        "gemm": Path("evals") / "gemm",
     }
     return known.get(suite, Path(suite))
 
