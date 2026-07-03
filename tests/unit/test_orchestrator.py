@@ -113,12 +113,15 @@ def test_orchestrator_passes_configured_correctness_shapes() -> None:
             run_results=[
                 RunResult(ok=True, output_tensors=[torch.arange(6, dtype=torch.float32).reshape(2, 3)]),
                 RunResult(ok=True, output_tensors=[torch.arange(20, dtype=torch.float32).reshape(4, 5)]),
+                # rank>=2 specs also get verified at the (tiny, here) benchmark shape
+                RunResult(ok=True, output_tensors=[torch.arange(4, dtype=torch.float32).reshape(2, 2)]),
             ],
         ),
         store=store,
         cfg=SynthesisConfig(
             retry_budgets=RetryBudgets(performance=0),
             correctness_shapes=((2, 3), (4, 5)),
+            performance_shape_n=4,  # rank2 -> benchmark shape (2, 2), cheap to verify
         ),
     )
 
@@ -126,7 +129,9 @@ def test_orchestrator_passes_configured_correctness_shapes() -> None:
 
     assert result.passed is True
     assert result.correctness is not None
-    assert result.correctness.shapes_tested == [(2, 3), (4, 5)]
+    # configured shapes PLUS the benchmark shape (2,2) — correctness now covers the
+    # size performance will benchmark, so scale-dependent bugs fail the hard gate.
+    assert result.correctness.shapes_tested == [(2, 3), (4, 5), (2, 2)]
 
 
 def test_orchestrator_hard_gate_fails_on_correctness_mismatch() -> None:

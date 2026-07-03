@@ -852,3 +852,24 @@ def test_outputs_match_helper() -> None:
     assert _outputs_match(nan, a, rtol=1e-3, atol=1e-3)[0] is False
     # shape mismatch -> not a match
     assert _outputs_match(torch.ones(4), torch.ones(8), rtol=1e-3, atol=1e-3) == (False, None)
+
+
+def test_correctness_shapes_with_benchmark_rank_gate() -> None:
+    from cuda_engine.orchestrator import _correctness_shapes_with_benchmark
+
+    def mk(shapes):
+        return KernelSpec(
+            name="k", target_arch="sm_80",
+            inputs=[TensorArg(name=f"a{i}", dtype="fp32", shape=s) for i, s in enumerate(shapes)],
+            outputs=[TensorArg(name="o", dtype="fp32", shape=shapes[0])],
+            precision_tolerance=PrecisionTolerance(),
+            optimization_priority=OptimizationPriority.BALANCED,
+        )
+
+    base = ((128,),)
+    # rank-1 (elementwise) — shape-invariant, so NOT augmented
+    assert _correctness_shapes_with_benchmark(base, mk([("N",)]), 16) == base
+    # rank-2 (e.g. GEMM) — benchmark shape appended (16 -> dim 4 -> (4,4))
+    assert _correctness_shapes_with_benchmark(base, mk([("M", "K"), ("K", "N")]), 16) == ((128,), (4, 4))
+    # dedup — no-op if the benchmark shape is already present
+    assert _correctness_shapes_with_benchmark(((4, 4),), mk([("M", "K"), ("K", "N")]), 16) == ((4, 4),)
