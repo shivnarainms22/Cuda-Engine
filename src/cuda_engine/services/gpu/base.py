@@ -32,6 +32,11 @@ class BenchmarkResult(BaseModel):
     baseline_error: str | None = None
     eager_ms: float | None = None
     achieved_gbps: float | None = None
+    # Whether the kernel's output matched the reference AT THE BENCHMARK SHAPE.
+    # Defaults True (e.g. no-reference timing); a False here means the reported
+    # timing is for a wrong kernel and must not be counted as a speedup.
+    benchmark_correct: bool = True
+    benchmark_max_abs_err: float | None = None
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
@@ -87,6 +92,9 @@ class GPURunner(ABC):
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
+        rtol: float = 1e-3,
+        atol: float = 1e-3,
+        measure_baseline: bool = True,
     ) -> BenchmarkResult:
         raise NotImplementedError
 

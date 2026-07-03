@@ -90,7 +90,10 @@ def test_stage4_performance_uses_configured_benchmark_settings() -> None:
             "reference_path": None,
             "warmup_iterations": 2,
             "timed_iterations": 3,
-            "timeout_seconds": 60,
+            "timeout_seconds": 180,
+            "rtol": 0.001,
+            "atol": 0.001,
+            "measure_baseline": True,
         }
     ]
 
@@ -402,11 +405,14 @@ def test_stage4_retry_loop_reuses_cached_baseline() -> None:
         retry_budget=1, reference=_ref,
     )
 
-    # reference is passed as reference_path now (avoids pickle of dynamic callables)
+    # Initial benchmark measures the baseline (reference_path set, measure_baseline True);
+    # retry benchmarks REUSE the cached baseline (measure_baseline False) but still pass
+    # reference_path so the candidate is verified correct at the benchmark shape.
     assert gpu.benchmark_calls[0]["reference"] is None
     assert gpu.benchmark_calls[0]["reference_path"] is not None
-    assert gpu.benchmark_calls[1]["reference"] is None
-    assert gpu.benchmark_calls[1]["reference_path"] is None
+    assert gpu.benchmark_calls[0]["measure_baseline"] is True
+    assert gpu.benchmark_calls[1]["reference_path"] is not None
+    assert gpu.benchmark_calls[1]["measure_baseline"] is False
     # Final speedup uses cached baseline 2.0 against retry custom_ms 1.0 → 2.0
     assert report.speedup_vs_torch_compile == 2.0
 
@@ -766,3 +772,83 @@ def test_stage4_skips_escalation_when_disabled() -> None:
     assert llm.call_count == 1
     # Still below_target since Opus never ran
     assert report.below_target is True
+
+
+def test_stage4_rejects_fast_but_wrong_kernel_at_benchmark_shape() -> None:
+    """Integrity gate: a kernel incorrect at the benchmark shape must NOT be
+    credited with a speedup, even if it is 'faster'."""
+    store = InMemoryStore()
+    gpu = MockGPURunner(
+        benchmark_results=[
+            BenchmarkResult(
+                ok=True,
+                custom_ms=0.01,      # blazing fast...
+                baseline_ms=1.0,     # ...vs a real baseline (would be 100x)
+                eager_ms=1.0,
+                benchmark_correct=False,   # ...but WRONG at the benchmark shape
+                benchmark_max_abs_err=42.0,
+            )
+        ]
+    )
+    stage = Stage4Performance(gpu=gpu, store=store)
+
+    def _ref(x):
+        return x
+
+    report, _ = stage.run(
+        spec=_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("k.cu"), kernel_so_path=Path("k.so")),
+        run_id="run123",
+        retry_budget=0,
+        reference=_ref,
+    )
+
+    assert report.speedup_vs_torch_compile is None
+    assert report.speedup_vs_reference is None
+    assert report.below_target is True
+    assert any("incorrect at benchmark shape" in w for w in report.warnings)
+
+
+def test_stage4_correct_kernel_still_reports_speedup() -> None:
+    """Control: a correct kernel (benchmark_correct True) is credited normally."""
+    store = InMemoryStore()
+    gpu = MockGPURunner(
+        benchmark_results=[
+            BenchmarkResult(
+                ok=True, custom_ms=0.5, baseline_ms=1.0, eager_ms=1.0,
+                benchmark_correct=True,
+            )
+        ]
+    )
+    stage = Stage4Performance(gpu=gpu, store=store)
+
+    def _ref(x):
+        return x
+
+    report, _ = stage.run(
+        spec=_spec(),
+        artifact=KernelArtifact(kernel_cu_path=Path("k.cu"), kernel_so_path=Path("k.so")),
+        run_id="run123",
+        retry_budget=0,
+        reference=_ref,
+    )
+    assert report.speedup_vs_torch_compile == 2.0
+    assert report.below_target is False
+
+
+def test_outputs_match_helper() -> None:
+    import torch
+
+    from cuda_engine.services.gpu._run_kernel_child import _outputs_match
+
+    a = torch.ones(8, 8)
+    assert _outputs_match(a, a.clone(), rtol=1e-3, atol=1e-3) == (True, 0.0)
+    # off by 1.0 -> not a match, max_abs_err reported
+    ok, err = _outputs_match(a, a + 1.0, rtol=1e-3, atol=1e-3)
+    assert ok is False and err == 1.0
+    # non-finite output -> not a match
+    nan = a.clone()
+    nan[0, 0] = float("nan")
+    assert _outputs_match(nan, a, rtol=1e-3, atol=1e-3)[0] is False
+    # shape mismatch -> not a match
+    assert _outputs_match(torch.ones(4), torch.ones(8), rtol=1e-3, atol=1e-3) == (False, None)

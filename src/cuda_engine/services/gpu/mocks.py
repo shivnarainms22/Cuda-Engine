@@ -56,6 +56,9 @@ class MockGPURunner(GPURunner):
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
+        rtol: float = 1e-3,
+        atol: float = 1e-3,
+        measure_baseline: bool = True,
     ) -> BenchmarkResult:
         self.benchmark_calls.append(
             {
@@ -66,6 +69,9 @@ class MockGPURunner(GPURunner):
                 "warmup_iterations": warmup_iterations,
                 "timed_iterations": timed_iterations,
                 "timeout_seconds": timeout_seconds,
+                "rtol": rtol,
+                "atol": atol,
+                "measure_baseline": measure_baseline,
             }
         )
         if not self._benchmark:

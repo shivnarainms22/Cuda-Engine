@@ -42,4 +42,7 @@ class SynthesisConfig(BaseModel):
     opus_retry_budget_codegen: int = 1
     opus_retry_budget_performance: int = 1
     request_timeout_seconds: int = 120
+    # Perf benchmark subprocess budget. Larger than request_timeout_seconds because
+    # torch.compile autotuning a large GEMM baseline can exceed 60s.
+    benchmark_timeout_seconds: int = 180
     stage_models: StageModels = Field(default_factory=StageModels)
