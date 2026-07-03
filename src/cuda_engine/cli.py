@@ -65,6 +65,14 @@ def synthesize_cmd(
             help="Artifact root for the run. Defaults to ~/.cache/cuda_engine/runs/.",
         ),
     ] = None,
+    resume: Annotated[
+        str | None,
+        typer.Option(
+            "--resume",
+            help="Resume a prior run by its run_id, reusing completed stages "
+            "(same prompt/reference required).",
+        ),
+    ] = None,
 ) -> None:
     """Synthesize a single CUDA kernel from a prompt + reference function."""
     if prompt is None and prompt_file is None:
@@ -88,6 +96,7 @@ def synthesize_cmd(
         reference=reference_fn,
         target=target,
         config=config,
+        resume_run_id=resume,
     )
 
     typer.echo(f"Run: {result.run_id}")

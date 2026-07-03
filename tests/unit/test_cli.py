@@ -308,10 +308,11 @@ def test_synthesize_cmd_invokes_synthesize_and_prints_summary(
 
     captured: dict[str, object] = {}
 
-    def fake_synthesize(*, prompt, reference, target, config):
+    def fake_synthesize(*, prompt, reference, target, config, resume_run_id=None):
         captured["prompt"] = prompt
         captured["target"] = target
         captured["reference_callable"] = callable(reference)
+        captured["resume_run_id"] = resume_run_id
         return SynthesisResult.ok(
             run_id="abc12345",
             artifacts_dir=str(tmp_path / "runs" / "abc12345"),

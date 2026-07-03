@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 
 class ArtifactStore(ABC):
@@ -21,4 +22,12 @@ class ArtifactStore(ABC):
 
     @abstractmethod
     def write_json(self, run_id: str, rel_path: str, obj: object) -> Path:
+        raise NotImplementedError
+
+    @abstractmethod
+    def exists(self, run_id: str, rel_path: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def read_json(self, run_id: str, rel_path: str) -> Any:
         raise NotImplementedError

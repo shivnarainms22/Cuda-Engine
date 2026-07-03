@@ -15,6 +15,7 @@ def synthesize(
     target: str = "sm_80",
     config: SynthesisConfig | None = None,
     *,
+    resume_run_id: str | None = None,
     _llm: LLMClient | None = None,
     _gpu: GPURunner | None = None,
     _store: ArtifactStore | None = None,
@@ -40,4 +41,6 @@ def synthesize(
         _store = LocalDirStore(cfg=cfg)
 
     orchestrator = Orchestrator(llm=_llm, gpu=_gpu, store=_store, cfg=cfg)
-    return orchestrator.run(prompt=prompt, reference=reference, target=target)
+    return orchestrator.run(
+        prompt=prompt, reference=reference, target=target, resume_run_id=resume_run_id
+    )

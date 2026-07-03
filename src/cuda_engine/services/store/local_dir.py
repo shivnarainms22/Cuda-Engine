@@ -1,6 +1,7 @@
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -40,3 +41,12 @@ class LocalDirStore(ArtifactStore):
     def write_json(self, run_id: str, rel_path: str, obj: object) -> Path:
         payload: object = obj.model_dump(mode="json") if isinstance(obj, BaseModel) else obj
         return self.write_text(run_id, rel_path, json.dumps(payload, default=str, indent=2))
+
+    def exists(self, run_id: str, rel_path: str) -> bool:
+        return (self.run_dir(run_id) / rel_path).exists()
+
+    def read_json(self, run_id: str, rel_path: str) -> Any:
+        path = self.run_dir(run_id) / rel_path
+        if not path.exists():
+            raise FileNotFoundError(f"No such file: {path}")
+        return json.loads(path.read_text(encoding="utf-8"))

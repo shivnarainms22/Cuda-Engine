@@ -66,6 +66,11 @@ cuda-engine synthesize \
 # Inspect a previous run
 cuda-engine inspect <run_id>
 
+# Resume a run that died mid-pipeline (Colab disconnect, credit exhaustion, ...)
+# — completed stages are reused from disk, not re-paid. Same prompt/reference required.
+cuda-engine synthesize --resume <run_id> \
+    --prompt "..." --reference path/to/rms_norm.py --target sm_80
+
 # Run the internal eval suite (42 kernels)
 cuda-engine eval --suite internal --out evals/results/2026-05-12 --resume
 
