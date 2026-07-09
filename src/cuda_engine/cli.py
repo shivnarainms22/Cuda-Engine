@@ -266,6 +266,39 @@ def eval_suite(
     typer.echo(f"Summary: {summary.markdown_path}")
 
 
+@app.command("compare-providers")
+def compare_providers(
+    results: Annotated[
+        list[Path],
+        typer.Argument(help="results.csv files, or run dirs each containing one."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Where to write the comparison markdown."),
+    ] = Path("provider_comparison.md"),
+) -> None:
+    """Combine per-provider eval results into a 'which model writes the best CUDA' table.
+
+    Feed it the results.csv from each provider's eval run (run the suite once per
+    provider with `eval --model-id <provider:model>`), then compare here — free.
+    """
+    eval_runner = _load_eval_runner()
+    rows: list[Any] = []
+    for path in results:
+        csv_path = path / "results.csv" if path.is_dir() else path
+        if not csv_path.exists():
+            typer.echo(f"no results.csv found at: {csv_path}")
+            raise typer.Exit(code=1)
+        rows.extend(eval_runner.read_rows_from_csv(csv_path))
+    if not rows:
+        typer.echo("no result rows found")
+        raise typer.Exit(code=1)
+    markdown = eval_runner.build_provider_comparison(rows)
+    out.write_text(markdown, encoding="utf-8")
+    typer.echo(markdown)
+    typer.echo(f"Comparison written: {out}")
+
+
 def _count_suite_kernels(suite_root: Path, only: set[str] | None, limit: int | None) -> int:
     if not suite_root.exists():
         return 0
