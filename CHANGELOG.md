@@ -4,6 +4,29 @@ All notable changes to **cuda-engine** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Synthesis-stage resumability** — `cuda-engine synthesize --resume <run_id>`
+  (and `synthesize(..., resume_run_id=...)`) resumes a run killed mid-pipeline
+  (Colab disconnect, credit exhaustion), reusing completed stages from a
+  `checkpoint.json` with an inputs-fingerprint guard.
+- **Cross-provider comparison** — `cuda-engine compare-providers <run>… --out cmp.md`
+  combines per-provider eval results into a "which model writes the best CUDA"
+  table (functional %, median/p25 speedup, fast_1 per model).
+
+### Changed / hardened
+- **Trustworthy perf benchmarking.** The benchmark now verifies the kernel's
+  output against the reference *at the benchmark shape*, so a kernel that is fast
+  but wrong at scale can no longer post a speedup; and the correctness hard gate
+  verifies rank-≥2 kernels at the benchmark shape so scale bugs are repaired, not
+  hidden. Baseline benchmark timeout is now configurable (fixes `torch.compile`
+  GEMM baselines timing out).
+
+### In progress
+- GEMM/matmul (v2.0) — eval suite + the above measurement/correctness integrity
+  fixes are in; fused-epilogue speed + tensor-core quality are next.
+
 ## [1.1.0] - 2026-06-29
 
 "Sharpen" — pluggable LLM providers, a bound-aware performance-repair loop, and
