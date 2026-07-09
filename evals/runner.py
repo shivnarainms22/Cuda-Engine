@@ -398,6 +398,72 @@ def _percentile(values: list[float], percentile: float) -> float | None:
     return values[lower] + (values[upper] - values[lower]) * fraction
 
 
+def read_rows_from_csv(path: Path) -> list[EvalRow]:
+    """Read the rows back out of a `results.csv` produced by a prior eval run."""
+    rows: list[EvalRow] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        for record in csv.DictReader(handle):
+            failed_stage = (
+                int(record["failed_stage"]) if record.get("failed_stage") else None
+            )
+            below = record.get("below_target")
+            rows.append(
+                EvalRow(
+                    kernel=record.get("kernel", ""),
+                    passed=record.get("passed", "") == "true",
+                    run_id=record.get("run_id", ""),
+                    failed_stage=failed_stage,
+                    failure_reason=record.get("failure_reason", ""),
+                    speedup_vs_torch_compile=_parse_float_or_number(
+                        record.get("speedup_vs_torch_compile")
+                    ),
+                    speedup_vs_reference=_parse_float_or_number(
+                        record.get("speedup_vs_reference")
+                    ),
+                    below_target=(below == "true") if below else None,
+                    artifacts_dir=record.get("artifacts_dir", ""),
+                    failure_kind=record.get("failure_kind", ""),
+                    baseline_status=record.get("baseline_status", ""),
+                    regression=record.get("regression", ""),
+                    provider=record.get("provider", ""),
+                    model_id=record.get("model_id", ""),
+                )
+            )
+    return rows
+
+
+def build_provider_comparison(rows: list[EvalRow]) -> str:
+    """Render a 'which model writes the best CUDA' comparison: group rows by
+    model_id and report functional pass rate, median/p25 speedup vs torch.compile,
+    and fast_1 per model. (v1.1 spec §2.4, deferred Task 12.)"""
+    groups: dict[str, list[EvalRow]] = {}
+    for row in rows:
+        groups.setdefault(row.model_id or "(unspecified)", []).append(row)
+
+    lines = [
+        "# Provider comparison",
+        "",
+        "| Model id | Provider | Kernels | Functional | Median vs tc | P25 vs tc | fast_1 |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for model_id in sorted(groups):
+        group = groups[model_id]
+        metrics = _m3_metrics(group)
+        provider = next((r.provider for r in group if r.provider), "?")
+        total = metrics["total"]
+        passed = metrics["passed"]
+        rate = metrics["pass_rate_pct"]
+        assert isinstance(rate, (int, float))
+        lines.append(
+            f"| {model_id} | {provider} | {total} | "
+            f"{passed}/{total} ({rate:.0f}%) | "
+            f"{_format_float(metrics['median_speedup'])} | "
+            f"{_format_float(metrics['p25_speedup'])} | "
+            f"{metrics['fast_1']}/{total} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _format_metric_speedup(value: float | int | None) -> str:
     if value is None:
         return "n/a"
