@@ -583,3 +583,23 @@ def _result(
 def _csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
+
+
+def test_classify_failure_budget_exhaustion_is_stage_not_runner() -> None:
+    from evals.runner import _classify_failure
+
+    # codegen budget exhaustion = the engine cleanly gave up in a stage
+    assert _classify_failure(
+        failed_stage=None,
+        failure_reason="BudgetExhaustedError: codegen exhausted retry budget after 3 attempts: no compile result",
+    ) == "stage_failure"
+    # a genuinely unexpected exception is still a runner error
+    assert _classify_failure(
+        failed_stage=None, failure_reason="RuntimeError: something unexpected"
+    ) == "runner_error"
+    # credit/API errors still classify as external
+    assert _classify_failure(
+        failed_stage=None, failure_reason="BadRequestError: credit balance is too low"
+    ) == "external_error"
+    # an explicit failed_stage stays a stage failure
+    assert _classify_failure(failed_stage=3, failure_reason="correctness check failed") == "stage_failure"

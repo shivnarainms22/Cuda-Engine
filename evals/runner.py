@@ -547,7 +547,11 @@ def _classify_failure(*, failed_stage: int | None, failure_reason: str) -> str:
     )
     if any(marker in reason for marker in external_markers):
         return "external_error"
-    if failed_stage is not None:
+    # A budget exhaustion / structural stage error is the engine cleanly giving
+    # up inside a stage (it tried and couldn't produce a valid kernel) — a stage
+    # failure, NOT an unexpected runner/infra crash.
+    stage_markers = ("budgetexhausted", "exhausted retry budget", "structuralstageerror")
+    if failed_stage is not None or any(marker in reason for marker in stage_markers):
         return "stage_failure"
     return "runner_error"
 
