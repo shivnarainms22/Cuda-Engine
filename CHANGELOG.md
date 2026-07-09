@@ -4,28 +4,27 @@ All notable changes to **cuda-engine** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-07-08
+
+Backward-compatible. Robustness + observability.
 
 ### Added
 - **Synthesis-stage resumability** — `cuda-engine synthesize --resume <run_id>`
   (and `synthesize(..., resume_run_id=...)`) resumes a run killed mid-pipeline
   (Colab disconnect, credit exhaustion), reusing completed stages from a
-  `checkpoint.json` with an inputs-fingerprint guard.
+  `checkpoint.json` with an inputs-fingerprint guard so it never resumes against
+  a changed prompt/reference.
 - **Cross-provider comparison** — `cuda-engine compare-providers <run>… --out cmp.md`
   combines per-provider eval results into a "which model writes the best CUDA"
-  table (functional %, median/p25 speedup, fast_1 per model).
+  table (functional %, median/p25 speedup, fast_1 per model). Run the suite once
+  per provider (`eval --model-id …`), then combine.
 
-### Changed / hardened
-- **Trustworthy perf benchmarking.** The benchmark now verifies the kernel's
-  output against the reference *at the benchmark shape*, so a kernel that is fast
-  but wrong at scale can no longer post a speedup; and the correctness hard gate
-  verifies rank-≥2 kernels at the benchmark shape so scale bugs are repaired, not
-  hidden. Baseline benchmark timeout is now configurable (fixes `torch.compile`
-  GEMM baselines timing out).
+### Fixed
+- Eval failure classification: a codegen budget-exhaustion / structural stage
+  error is now reported as a `stage_failure` (the engine cleanly gave up inside a
+  stage), not `runner_error` (which wrongly implied infra flakiness).
 
-### In progress
-- GEMM/matmul (v2.0) — eval suite + the above measurement/correctness integrity
-  fixes are in; fused-epilogue speed + tensor-core quality are next.
+[1.2.0]: https://github.com/shivnarainms22/Cuda-Engine/releases/tag/v1.2.0
 
 ## [1.1.0] - 2026-06-29
 
