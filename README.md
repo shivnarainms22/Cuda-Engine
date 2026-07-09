@@ -4,7 +4,7 @@
 
 `cuda-engine` is a Python library and CLI that turns a natural-language description and a reference PyTorch function into a CUDA kernel that compiles, matches the reference within tolerance on a real GPU, and benchmarks against `torch.compile`. It uses Claude (Anthropic) for a 5-stage agent loop (interview → codegen → correctness → performance → polish) with Nsight-driven perf repair and Sonnet→Opus escalation when budgets bust.
 
-**Status:** pre-1.0. Implementation is feature-complete through M3; v1.0 release gate (M4) is pending. Internal regression suite, eval runner, nightly CI, and `torch.compile` baseline measurement are all in place. See [docs/milestones/M3-evidence.md](docs/milestones/M3-evidence.md) for the most recent eval results.
+**Status:** **v1.1 released** ([on PyPI](https://pypi.org/project/cuda-engine/) — `pip install cuda-engine`). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers (OpenAI / Gemini / any OpenAI-compatible endpoint) + a bound-aware perf-repair loop. Elementwise/reduction/fused kernels are solid; GEMM/matmul is in progress (v2.0, on the `v2.0/gemm` branch).
 
 ---
 
@@ -76,6 +76,9 @@ cuda-engine eval --suite internal --out evals/results/2026-05-12 --resume
 
 # Run the suite on a different provider (to benchmark models against each other)
 cuda-engine eval --suite internal --out evals/results/openai --model-id openai:gpt-4o
+
+# Compare providers: which model writes the best CUDA? (combines prior runs, no cost)
+cuda-engine compare-providers evals/results/anthropic evals/results/openai --out compare.md
 ```
 
 `path/to/rms_norm.py` should define either a top-level `REFERENCE` variable or a top-level `reference()` function.
@@ -169,13 +172,14 @@ Design document: [`docs/superpowers/specs/2026-04-26-cuda-synthesis-engine-desig
 
 ## Eval results
 
-The internal regression suite has 30 hand-curated kernels covering elementwise ops, reductions, and simple fused kernels. All speedups are measured on an A100 (sm_80) against the **fastest** `torch.compile` mode (best of `default` / `max-autotune` / `reduce-overhead`) at N≈16M, so a win means beating torch.compile at its best.
+The internal regression suite has **42** hand-curated kernels covering elementwise ops, reductions, and simple fused kernels. All speedups are measured on an A100 (sm_80) against the **fastest** `torch.compile` mode (best of `default` / `max-autotune` / `reduce-overhead`) at N≈16M, so a win means beating torch.compile at its best.
 
-**Internal suite — 30/30, A100, 2026-06-01** ([M3-evidence.md](docs/milestones/M3-evidence.md)):
-- Functional pass rate: **30/30 (100%)**.
-- Median speedup vs torch.compile: **1.04×**; p25: **1.00×**.
-- **fast_1: 24/30 (80%)** kernels strictly faster than torch.compile.
-- Biggest wins: `topk_fp32` 12.5× (inductor falls back to a slow sort), `masked_mean` 2.6×, `cumulative_max` 1.45×, `softmax_lastdim` 1.33×. As expected for bandwidth-bound elementwise ops, those sit at parity (torch.compile is already at the HBM roofline); the wins come from reductions/scans.
+**v1.0 gate — A100** ([M3-evidence.md](docs/milestones/M3-evidence.md), [M4-evidence.md](docs/milestones/M4-evidence.md)):
+- Internal suite (30 at release): **30/30 (100%)**, median **1.04×**, p25 **1.00×**, fast_1 **24/30 (80%)**.
+- KernelBench external subset: **12/12 (100%)**, median **1.05×**.
+- Biggest wins: `topk_fp32` 12.5× (inductor falls back to a slow sort), `masked_mean` 2.6×, `cumulative_max` 1.45×, `softmax_lastdim` 1.33×. Bandwidth-bound elementwise ops sit at parity (torch.compile is already at the HBM roofline); the wins come from reductions/scans.
+
+v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark providers against each other (`compare-providers`). GEMM/matmul (v2.0) is in progress and not yet in these numbers.
 
 **KernelBench external subset** (12 unseen, in-scope level1 ops): 9/9 functional on the kernels run so far (remaining 3 pending a credit top-up).
 
