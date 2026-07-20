@@ -172,19 +172,40 @@ slightly wrong is the usual cause of compile failures — follow this exactly:
 - Includes: `#include <cuda_fp16.h>` and `#include <mma.h>`; then `using namespace nvcuda;`.
 - Fragments (16x16x16 tile for fp16/bf16), with EXACT template arguments:
     wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b_frag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
     wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc_frag;   // accumulate in fp32
+- LAYOUT: inputs are ROW-MAJOR and contiguous, so BOTH fragments are row_major,
+  with lda = K and ldb = N. Do not copy the col_major matrix_b from generic WMMA
+  samples — those assume a column-major B. A layout mismatch still COMPILES and
+  silently computes A @ B.T, so it will not show up as a compile error.
 - Reinterpret fp16 tensor pointers as `const half*` / `half*`.
 - One warp computes one 16x16 output tile. Per tile, loop K in steps of 16:
     wmma::fill_fragment(acc_frag, 0.0f);
     for (int k = 0; k < K; k += 16) {
-        wmma::load_matrix_sync(a_frag, aPtr + kOffsetA, lda);  // lda = leading dim
-        wmma::load_matrix_sync(b_frag, bPtr + kOffsetB, ldb);
+        wmma::load_matrix_sync(a_frag, aPtr + (tileRow * 16) * lda + k, lda);
+        wmma::load_matrix_sync(b_frag, bPtr + k * ldb + tileCol * 16, ldb);
         wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);
     }
-    wmma::store_matrix_sync(cPtr + cOffset, acc_frag, ldc, wmma::mem_row_major);
-- Launch with blockDim.x a multiple of 32 (whole warps). Benchmark shapes are
-  multiples of 16; only add a scalar remainder path if the spec allows non-16 sizes.
+- OUTPUT DTYPE: store_matrix_sync requires the pointer element type to match the
+  fragment type, so a float accumulator CANNOT be stored to a half* output — that
+  is a compile error, not a warning. For an fp16 output, stage through shared
+  memory and convert:
+    __shared__ float stage[16 * 16];
+    wmma::store_matrix_sync(stage, acc_frag, 16, wmma::mem_row_major);
+    __syncwarp();
+    for (int i = laneId; i < 16 * 16; i += 32) {
+        int r = i / 16, c = i % 16;
+        int gr = tileRow * 16 + r, gc = tileCol * 16 + c;
+        if (gr < M && gc < N) cPtr[gr * ldc + gc] = __float2half(stage[i]);
+    }
+  (For an fp32 output you may store the accumulator straight to cPtr with ldc.)
+- Launch with blockDim.x a multiple of 32 (whole warps).
+- SHAPES: a remainder path is REQUIRED, not optional. Correctness is checked at
+  N = 0, 1, 127, 128, 1024, 4097 and at the 4096 benchmark shape — so 1, 127 and
+  4097 are not multiples of 16. A WMMA-only kernel fails the correctness gate.
+  Handle ragged edges by guarding the stores as above and zero-padding the loaded
+  tiles through shared memory, or by routing sizes below one 16x16 tile to a
+  scalar path. N = 0 must be a safe no-op.
 - If unsure whether WMMA will compile, a correct shared-memory-tiled CUDA-core
   kernel is an acceptable fallback — correctness first."""
 

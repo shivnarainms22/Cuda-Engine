@@ -58,6 +58,43 @@ def test_guidance_only_for_tensor_core_matmul_dtypes() -> None:
     assert _tensor_core_matmul_guidance(_MM_FP32) is None       # fp32 input isn't a TC dtype key
 
 
+def test_guidance_matches_row_major_input_layout() -> None:
+    """Inputs are row-major contiguous (torch .reshape) and the fixture prompts say
+    so. A col_major matrix_b fragment silently computes A @ B.T — it COMPILES, so it
+    burns correctness/repair attempts rather than failing fast."""
+    g = _tensor_core_matmul_guidance(_MM_FP16)
+    assert g is not None
+    assert "wmma::matrix_b, 16, 16, 16, half, wmma::row_major" in g
+    # No col_major fragment may be DECLARED; naming it in the prose warning is fine.
+    assert "wmma::col_major" not in g
+
+
+def test_guidance_requires_handling_non_multiple_of_16_shapes() -> None:
+    """The hard correctness gate runs shapes that are not multiples of 16, so a
+    WMMA-only kernel cannot pass. The guidance must not present the remainder path
+    as optional. Derived from config so this fails if correctness_shapes changes."""
+    from cuda_engine.config import SynthesisConfig
+
+    ragged = [n for (n, *_rest) in SynthesisConfig().correctness_shapes if n % 16 and n > 1]
+    assert ragged, "expected at least one non-multiple-of-16 correctness shape"
+
+    g = _tensor_core_matmul_guidance(_MM_FP16)
+    assert g is not None
+    for n in ragged:
+        assert str(n) in g, f"guidance never mentions correctness shape {n}"
+    assert "only add a scalar remainder path if" not in g
+
+
+def test_guidance_shows_fp32_accumulator_to_fp16_output_conversion() -> None:
+    """store_matrix_sync requires the pointer type to match the fragment type, so a
+    float accumulator cannot be stored straight to the half* output of an fp16
+    matmul — that is a hard compile error. The guidance must show the conversion."""
+    g = _tensor_core_matmul_guidance(_MM_FP16)
+    assert g is not None
+    assert "__float2half" in g
+    assert "float" in g and "store_matrix_sync" in g
+
+
 def _compiling_response() -> LLMResponse:
     return LLMResponse(
         text="```cuda\ncode\n```",
