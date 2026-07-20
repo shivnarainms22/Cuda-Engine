@@ -95,6 +95,15 @@ def test_guidance_shows_fp32_accumulator_to_fp16_output_conversion() -> None:
     assert "float" in g and "store_matrix_sync" in g
 
 
+def test_guidance_stages_output_per_warp_not_per_block() -> None:
+    """Every warp in the block reaches the epilogue, so a single block-shared
+    staging tile is a data race that compiles and corrupts results silently."""
+    g = _tensor_core_matmul_guidance(_MM_FP16)
+    assert g is not None
+    assert "stage[WARPS_PER_BLOCK][16 * 16]" in g
+    assert "stage[warpId]" in g
+
+
 def _compiling_response() -> LLMResponse:
     return LLMResponse(
         text="```cuda\ncode\n```",

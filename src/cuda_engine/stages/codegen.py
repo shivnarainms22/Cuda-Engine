@@ -189,14 +189,17 @@ slightly wrong is the usual cause of compile failures — follow this exactly:
 - OUTPUT DTYPE: store_matrix_sync requires the pointer element type to match the
   fragment type, so a float accumulator CANNOT be stored to a half* output — that
   is a compile error, not a warning. For an fp16 output, stage through shared
-  memory and convert:
-    __shared__ float stage[16 * 16];
-    wmma::store_matrix_sync(stage, acc_frag, 16, wmma::mem_row_major);
+  memory and convert. The staging buffer MUST be per-warp — every warp in the
+  block reaches this code, so a single shared tile is a data race:
+    const int warpId = threadIdx.x / 32;      // WARPS_PER_BLOCK = blockDim.x / 32
+    const int laneId = threadIdx.x % 32;
+    __shared__ float stage[WARPS_PER_BLOCK][16 * 16];
+    wmma::store_matrix_sync(&stage[warpId][0], acc_frag, 16, wmma::mem_row_major);
     __syncwarp();
     for (int i = laneId; i < 16 * 16; i += 32) {
         int r = i / 16, c = i % 16;
         int gr = tileRow * 16 + r, gc = tileCol * 16 + c;
-        if (gr < M && gc < N) cPtr[gr * ldc + gc] = __float2half(stage[i]);
+        if (gr < M && gc < N) cPtr[gr * ldc + gc] = __float2half(stage[warpId][i]);
     }
   (For an fp32 output you may store the accumulator straight to cPtr with ldc.)
 - Launch with blockDim.x a multiple of 32 (whole warps).
