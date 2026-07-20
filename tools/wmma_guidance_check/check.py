@@ -26,7 +26,7 @@ SHAPES = [0, 1, 127, 128, 1024, 4097, 4096]
 HERE = Path(__file__).parent
 
 
-def build(out: Path) -> None:
+def build(out: Path, *, negative_control: bool = False) -> None:
     import torch
 
     major, minor = torch.cuda.get_device_capability()
@@ -35,6 +35,8 @@ def build(out: Path) -> None:
         "nvcc", "-shared", "-Xcompiler", "-fPIC",
         f"-arch={arch}", "-o", str(out), str(HERE / "kernel.cu"),
     ]
+    if negative_control:
+        cmd.insert(1, "-DNEGATIVE_CONTROL")  # must not land between -o and its path
     print(f"[build] {' '.join(cmd)}")
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -60,8 +62,15 @@ def main() -> int:
         print("need a CUDA device (a free Colab T4 works)")
         return 2
 
-    so = Path(tempfile.gettempdir()) / "wmma_guidance_check.so"
-    build(so)
+    # --negative-control rebuilds with the col_major matrix_b defect restored. It
+    # MUST fail; a pass would mean the harness cannot detect a layout bug and its
+    # green result proves nothing.
+    negative = "--negative-control" in sys.argv
+    if negative:
+        print("[mode] NEGATIVE CONTROL — this run is expected to FAIL\n")
+
+    so = Path(tempfile.gettempdir()) / f"wmma_guidance_check{'_neg' if negative else ''}.so"
+    build(so, negative_control=negative)
 
     lib = ctypes.CDLL(str(so))
     lib.launch_matmul_fp16.restype = ctypes.c_int
@@ -102,6 +111,18 @@ def main() -> int:
             failures.append((n, f"max_rel_err={rel:g} > rtol={rtol:g}"))
 
     print()
+    if negative:
+        # Inverted: the defect must be caught. N=1 is excluded from the verdict
+        # because a 1x1 matmul is layout-invariant, so it legitimately passes.
+        caught = [n for n, _ in failures if n > 1]
+        if caught:
+            print(f"NEGATIVE CONTROL OK — harness caught the layout defect at N={caught}.")
+            print("The green run is therefore meaningful.")
+            return 0
+        print("NEGATIVE CONTROL FAILED — harness did NOT catch a known-bad kernel.")
+        print("Its passing result proves nothing. Do not spend credits.")
+        return 1
+
     if failures:
         print("GUIDANCE DEFECTIVE — do not spend credits yet:")
         for n, why in failures:

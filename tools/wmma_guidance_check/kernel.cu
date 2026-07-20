@@ -32,7 +32,14 @@ __global__ void matmul_fp16_wmma(const half* __restrict__ aPtr,
 
     // Guidance: fragments are BOTH row_major (inputs are row-major contiguous).
     wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+#ifdef NEGATIVE_CONTROL
+    // Deliberately reintroduces defect #1 (the col_major matrix_b this guidance
+    // was fixed to remove) so we can confirm the harness actually detects it.
+    // A green run with this defined would mean the check proves nothing.
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b_frag;
+#else
     wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+#endif
     wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc_frag;
     wmma::fill_fragment(acc_frag, 0.0f);
 
