@@ -24,8 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GEMM baselines timing out).
 
 ### In progress
-- GEMM/matmul (v2.0) — eval suite + the above measurement/correctness integrity
-  fixes are in; fused-epilogue speed + tensor-core quality are next.
+- GEMM/matmul (v2.0) — eval suite + measurement/correctness integrity fixes are in.
+  Validated win: `matmul_bias_gelu_fp16` at **1.25×** vs torch's fused path (real,
+  correct-at-4096², CUDA-core fused epilogue). A tensor-core (WMMA) codegen-guidance
+  experiment (Rung 4) was tried and **reverted**: it fixed the `matmul_fp16` compile
+  failure but steered the fused kernel onto naive WMMA (~10% peak), collapsing the
+  1.25× win to 0.09×. Bare fp16 GEMM vs cuBLAS is not the goal; the fused CUDA-core
+  epilogue is. See `docs/milestones/v2.0-gemm-rung4-evidence.md`.
 
 ## [1.1.0] - 2026-06-29
 
