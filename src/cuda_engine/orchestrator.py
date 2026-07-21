@@ -422,10 +422,8 @@ class Orchestrator:
 
 def _artifact_accessible(artifact: KernelArtifact, run_id: str, store: ArtifactStore) -> bool:
     """Return True if the artifact's .cu source is readable through the store."""
-    path_key = artifact.kernel_cu_path.as_posix().replace("\\", "/")
-    marker = f"<memory>/{run_id}/"
-    if marker in path_key:
-        rel_path = path_key.split(marker, 1)[1]
+    rel_path = store.rel_path_of(run_id, artifact.kernel_cu_path)
+    if rel_path is not None:
         return store.exists(run_id, rel_path)
     return artifact.kernel_cu_path.exists()
 

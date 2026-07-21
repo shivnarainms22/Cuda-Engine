@@ -38,6 +38,37 @@ def test_inmemory_exists_false_for_unknown_run_id() -> None:
     assert store.exists("nonexistent", "file.json") is False
 
 
+def test_inmemory_read_text_round_trips() -> None:
+    store = InMemoryStore()
+    run_id = store.new_run()
+    store.write_text(run_id, "stage2/kernel.cu", "__global__ void k(){}")
+    assert store.read_text(run_id, "stage2/kernel.cu") == "__global__ void k(){}"
+
+
+def test_inmemory_read_text_raises_for_missing_path() -> None:
+    store = InMemoryStore()
+    run_id = store.new_run()
+    with pytest.raises(FileNotFoundError):
+        store.read_text(run_id, "missing.cu")
+
+
+def test_inmemory_rel_path_of_recovers_written_path() -> None:
+    """The Path returned by write_text maps back to its rel_path through the
+    store, so callers never need to know the store's path format."""
+    store = InMemoryStore()
+    run_id = store.new_run()
+    written = store.write_text(run_id, "stage2/kernel.cu", "x")
+    assert store.rel_path_of(run_id, written) == "stage2/kernel.cu"
+
+
+def test_inmemory_rel_path_of_none_for_foreign_path() -> None:
+    from pathlib import Path
+
+    store = InMemoryStore()
+    run_id = store.new_run()
+    assert store.rel_path_of(run_id, Path("/tmp/external/kernel.cu")) is None
+
+
 # ---- LocalDirStore ----
 
 def test_local_exists_false_for_missing_path(tmp_path) -> None:

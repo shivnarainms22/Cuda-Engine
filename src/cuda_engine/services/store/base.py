@@ -31,3 +31,17 @@ class ArtifactStore(ABC):
     @abstractmethod
     def read_json(self, run_id: str, rel_path: str) -> Any:
         raise NotImplementedError
+
+    @abstractmethod
+    def read_text(self, run_id: str, rel_path: str) -> str:
+        raise NotImplementedError
+
+    def rel_path_of(self, run_id: str, path: Path) -> str | None:
+        """The rel_path of an artifact path within this run, or None if the path
+        is not under this store's run dir (i.e. a plain filesystem path a caller
+        should read directly). Lets callers read a written artifact back through
+        the store without knowing its path format."""
+        try:
+            return path.relative_to(self.run_dir(run_id)).as_posix()
+        except ValueError:
+            return None

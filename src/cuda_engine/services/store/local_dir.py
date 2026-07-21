@@ -50,3 +50,9 @@ class LocalDirStore(ArtifactStore):
         if not path.exists():
             raise FileNotFoundError(f"No such file: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def read_text(self, run_id: str, rel_path: str) -> str:
+        path = self.run_dir(run_id) / rel_path
+        if not path.exists():
+            raise FileNotFoundError(f"No such file: {path}")
+        return path.read_text(encoding="utf-8")

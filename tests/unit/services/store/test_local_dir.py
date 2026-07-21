@@ -38,3 +38,22 @@ def test_local_dir_store_default_root_is_cache_dir() -> None:
     store = LocalDirStore(SynthesisConfig())
 
     assert store.root == Path.home() / ".cache" / "cuda_engine" / "runs"
+
+
+def test_local_dir_store_read_text_round_trips() -> None:
+    store = LocalDirStore(SynthesisConfig(artifact_root=".test_artifacts/store"))
+    run_id = store.new_run()
+    store.write_text(run_id, "stage2/kernel.cu", "__global__ void k(){}")
+
+    assert store.read_text(run_id, "stage2/kernel.cu") == "__global__ void k(){}"
+
+
+def test_rel_path_of_recovers_written_path_and_rejects_foreign() -> None:
+    """A path returned by write_text maps back to its rel_path; an unrelated
+    filesystem path is not under the store (None), so callers read it directly."""
+    store = LocalDirStore(SynthesisConfig(artifact_root=".test_artifacts/store"))
+    run_id = store.new_run()
+    written = store.write_text(run_id, "stage2/kernel.cu", "x")
+
+    assert store.rel_path_of(run_id, written) == "stage2/kernel.cu"
+    assert store.rel_path_of(run_id, Path("/etc/hosts")) is None

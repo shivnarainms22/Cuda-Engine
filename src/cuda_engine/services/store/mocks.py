@@ -34,3 +34,8 @@ class InMemoryStore(ArtifactStore):
         if (run_id, rel_path) not in self._files:
             raise FileNotFoundError(f"No such file in store: {run_id}/{rel_path}")
         return json.loads(self._files[(run_id, rel_path)].decode())
+
+    def read_text(self, run_id: str, rel_path: str) -> str:
+        if (run_id, rel_path) not in self._files:
+            raise FileNotFoundError(f"No such file in store: {run_id}/{rel_path}")
+        return self._files[(run_id, rel_path)].decode()

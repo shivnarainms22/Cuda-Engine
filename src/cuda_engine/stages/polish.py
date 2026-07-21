@@ -3,6 +3,7 @@ from typing import Any
 
 from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec, PerformanceReport
 from cuda_engine.prompts import load_prompt
+from cuda_engine.services.store.base import ArtifactStore
 from cuda_engine.stages.base import Stage
 from cuda_engine.stages.correctness import CORRECTNESS_SHAPES, Stage3Correctness
 
@@ -140,13 +141,8 @@ def _extract_cuda_source(text: str) -> str:
     return text.strip()
 
 
-def _read_artifact_source(artifact: KernelArtifact, run_id: str, store: object) -> str:
-    path_key = artifact.kernel_cu_path.as_posix().replace("\\", "/")
-    marker = f"<memory>/{run_id}/"
-    if marker in path_key:
-        rel_path = path_key.split(marker, 1)[1]
-        files = getattr(store, "_files", None)
-        if files is not None:
-            content = files[(run_id, rel_path)]
-            return str(content.decode())
+def _read_artifact_source(artifact: KernelArtifact, run_id: str, store: ArtifactStore) -> str:
+    rel_path = store.rel_path_of(run_id, artifact.kernel_cu_path)
+    if rel_path is not None:
+        return store.read_text(run_id, rel_path)
     return artifact.kernel_cu_path.read_text(encoding="utf-8")
