@@ -181,7 +181,7 @@ The internal regression suite has **42** hand-curated kernels covering elementwi
 
 v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark providers against each other (`compare-providers`); v1.2 added resumability. GEMM/matmul (v2.0) is merged on `main` but out of this in-scope suite — its status is a separate track: `matmul_bias_gelu_fp16` **1.25×** (real fused-epilogue win vs torch's fused path, correct at 4096²), `matmul_fp32` 0.66×, and bare `matmul_fp16` is deliberately not pursued (naive tensor-core GEMM can't beat cuBLAS, and wasn't the goal). See [v2.0-gemm-rung4-evidence.md](docs/milestones/v2.0-gemm-rung4-evidence.md).
 
-**KernelBench external subset** (12 unseen, in-scope level1 ops): 9/9 functional on the kernels run so far (remaining 3 pending a credit top-up).
+**KernelBench external subset** (12 unseen, in-scope level1 ops): 12/12 functional, hand-translated with no overlap with the internal suite.
 
 > An earlier baseline bug measured against `torch.compile`'s *slowest* mode (reduce-overhead) at too-small N, which inflated speedups (one kernel read 9.7× when the honest number is ~parity). Fixed in commit `21f3b2b`; all numbers above use the corrected best-mode baseline.
 
