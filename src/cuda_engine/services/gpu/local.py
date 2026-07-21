@@ -183,6 +183,9 @@ class LocalGPURunner(GPURunner):
         warmup_iterations: int = 10,
         timed_iterations: int = 50,
         timeout_seconds: int = 60,
+        rtol: float = 1e-3,
+        atol: float = 1e-3,
+        measure_baseline: bool = True,
     ) -> BenchmarkResult:
         run_dir = self.cache_root / "run_tmp" / uuid.uuid4().hex
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -210,7 +213,13 @@ class LocalGPURunner(GPURunner):
             str(warmup_iterations),
             "--timed-iterations",
             str(timed_iterations),
+            "--rtol",
+            repr(rtol),
+            "--atol",
+            repr(atol),
         ]
+        if not measure_baseline:
+            cmd.append("--skip-baseline")
         try:
             completed = subprocess.run(
                 cmd,

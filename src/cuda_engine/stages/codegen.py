@@ -48,7 +48,6 @@ class Stage2Codegen(Stage):
                 "cache_control": {"type": "ephemeral"},
             },
         ]
-
         last_result: CompileResult | None = None
         last_src: str = ""
         for attempt in range(1, retry_budget + 1):

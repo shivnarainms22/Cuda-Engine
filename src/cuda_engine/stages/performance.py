@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from cuda_engine.config import SynthesisConfig
@@ -60,6 +61,9 @@ class Stage4Performance(Stage):
             reference_path=_ref_path if reference is not None else None,
             warmup_iterations=self.cfg.benchmark_warmup_iterations,
             timed_iterations=self.cfg.benchmark_timed_iterations,
+            timeout_seconds=self.cfg.benchmark_timeout_seconds,
+            rtol=self.cfg.correctness_rtol,
+            atol=self.cfg.correctness_atol,
         )
         self.store.write_json(
             run_id,
@@ -104,6 +108,7 @@ class Stage4Performance(Stage):
                 model=sonnet_model,
                 attempt_offset=0,
                 baseline_ms=cached_baseline_ms,
+                reference_path=_ref_path if reference is not None else None,
             )
             warnings.extend(retry_warnings)
             notes.extend(retry_notes)
@@ -136,9 +141,30 @@ class Stage4Performance(Stage):
                 model=self.cfg.opus_model,
                 attempt_offset=retry_budget,
                 baseline_ms=cached_baseline_ms,
+                reference_path=_ref_path if reference is not None else None,
             )
             warnings.extend(opus_warnings)
             notes.extend(opus_notes)
+
+        # Integrity gate: never report a speedup for a kernel that is WRONG at the
+        # benchmark shape (correctness is otherwise only verified at smaller shapes).
+        if reference is not None and not current_benchmark.benchmark_correct:
+            reason = (
+                f"kernel incorrect at benchmark shape {benchmark_shape}: "
+                f"output does not match the reference within tolerance "
+                f"(max_abs_err={current_benchmark.benchmark_max_abs_err}); "
+                "speedup not counted"
+            )
+            report = PerformanceReport(
+                speedup_vs_reference=None,
+                speedup_vs_torch_compile=None,
+                achieved_gbps=current_benchmark.achieved_gbps,
+                below_target=True,
+                warnings=[*warnings, reason],
+                notes=notes,
+            )
+            _write_report(self.store, run_id, report)
+            return report, current_artifact
 
         report = PerformanceReport(
             speedup_vs_reference=_speedup(
@@ -167,6 +193,7 @@ class Stage4Performance(Stage):
         model: str,
         attempt_offset: int = 0,
         baseline_ms: float | None,
+        reference_path: Path | None = None,
     ) -> tuple[KernelArtifact, BenchmarkResult, float | None, list[str], list[str]]:
         assert self.llm is not None
         assert self.gpu is not None
@@ -271,9 +298,13 @@ class Stage4Performance(Stage):
             new_benchmark = self.gpu.benchmark_kernel(
                 candidate_so,
                 inputs,
-                reference=None,
+                reference_path=reference_path,
                 warmup_iterations=self.cfg.benchmark_warmup_iterations,
                 timed_iterations=self.cfg.benchmark_timed_iterations,
+                timeout_seconds=self.cfg.benchmark_timeout_seconds,
+                rtol=self.cfg.correctness_rtol,
+                atol=self.cfg.correctness_atol,
+                measure_baseline=False,  # reuse cached baseline; just re-time + verify correctness
             )
             self.store.write_json(
                 run_id,
@@ -282,6 +313,12 @@ class Stage4Performance(Stage):
             )
             if not new_benchmark.ok:
                 warnings.append(f"perf_repair attempt {attempt}: benchmark failed after recompile")
+                continue
+            # Reject a fast-but-wrong repair: it must still be correct at the benchmark shape.
+            if reference_path is not None and not new_benchmark.benchmark_correct:
+                warnings.append(
+                    f"perf_repair attempt {attempt}: rejected — incorrect at benchmark shape"
+                )
                 continue
 
             new_speedup = _speedup(

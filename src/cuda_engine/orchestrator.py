@@ -29,7 +29,7 @@ from cuda_engine.stages.base import BudgetExhaustedError
 from cuda_engine.stages.codegen import Stage2Codegen
 from cuda_engine.stages.correctness import Stage3Correctness
 from cuda_engine.stages.interview import Stage1Interview
-from cuda_engine.stages.performance import Stage4Performance
+from cuda_engine.stages.performance import Stage4Performance, _benchmark_shape
 from cuda_engine.stages.polish import Stage5Polish
 
 T = TypeVar("T")
@@ -47,6 +47,27 @@ def build_router(cfg: SynthesisConfig) -> LLMRouter:
     if os.environ.get("GEMINI_API_KEY"):
         providers["gemini"] = GeminiClient()
     return LLMRouter(providers)
+
+
+def _correctness_shapes_with_benchmark(
+    base: tuple[tuple[int, ...], ...],
+    spec: KernelSpec,
+    total_elements: int,
+) -> tuple[tuple[int, ...], ...]:
+    """Append the performance benchmark shape to the correctness shapes so a
+    kernel is verified correct at the size it will be benchmarked, not only at
+    small shapes. Deduplicated; no-op if already present.
+
+    Only for multi-dimensional (rank >= 2) specs — that's where scale-dependent
+    correctness bugs live (tiled GEMM, reductions). Per-element (rank 1) ops are
+    shape-invariant, so small-shape correctness already covers them and a huge
+    extra check would just waste GPU time.
+    """
+    rank = max((len(arg.shape) for arg in spec.inputs), default=1)
+    if rank < 2:
+        return base
+    bench = _benchmark_shape(spec, total_elements=total_elements)
+    return base if bench in base else (*base, bench)
 
 
 class Orchestrator:
@@ -142,6 +163,14 @@ class Orchestrator:
             checkpoint.objects["spec"] = spec.model_dump(mode="json")
             self.store.write_json(run_id, "checkpoint.json", checkpoint.model_dump(mode="json"))
 
+        # Also verify correctness AT the performance benchmark shape, so a kernel
+        # that is correct at small shapes but wrong at scale (e.g. a tiled GEMM
+        # with a large-N indexing bug) fails the hard gate and gets repaired,
+        # instead of silently posting a fake speedup at benchmark time.
+        correctness_shapes = _correctness_shapes_with_benchmark(
+            self.cfg.correctness_shapes, spec, self.cfg.performance_shape_n
+        )
+
         # --- Stages 2+3: Codegen + Correctness (including repair loop) ---
         if (
             "correctness" in completed
@@ -177,7 +206,7 @@ class Orchestrator:
                     reference=reference,
                     run_id=run_id,
                     retry_budget=self.cfg.retry_budgets.correctness,
-                    correctness_shapes=self.cfg.correctness_shapes,
+                    correctness_shapes=correctness_shapes,
                 ),
                 succeeded=lambda report: report.passed,
             )
@@ -223,7 +252,7 @@ class Orchestrator:
                         reference=reference,
                         run_id=run_id,
                         retry_budget=self.cfg.retry_budgets.correctness,
-                        correctness_shapes=self.cfg.correctness_shapes,
+                        correctness_shapes=correctness_shapes,
                     )
 
                 correctness = _run_traced_stage(
@@ -294,7 +323,7 @@ class Orchestrator:
                 reference=reference,
                 run_id=run_id,
                 model=self.cfg.stage_models.polish,
-                correctness_shapes=self.cfg.correctness_shapes,
+                correctness_shapes=correctness_shapes,
             ),
         )
         checkpoint.completed_stages.append("polish")

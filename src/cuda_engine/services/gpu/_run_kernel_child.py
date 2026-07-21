@@ -15,6 +15,9 @@ def main() -> None:
     parser.add_argument("--benchmark", action="store_true")
     parser.add_argument("--warmup-iterations", type=int, default=10)
     parser.add_argument("--timed-iterations", type=int, default=50)
+    parser.add_argument("--rtol", type=float, default=1e-3)
+    parser.add_argument("--atol", type=float, default=1e-3)
+    parser.add_argument("--skip-baseline", action="store_true")
     args = parser.parse_args()
 
     inputs, reference = _load_payload(Path(args.input))
@@ -27,6 +30,9 @@ def main() -> None:
                 reference,
                 warmup_iterations=args.warmup_iterations,
                 timed_iterations=args.timed_iterations,
+                rtol=args.rtol,
+                atol=args.atol,
+                measure_baseline=not args.skip_baseline,
             )
             payload = {
                 "ok": benchmark["ok"],
@@ -117,12 +123,18 @@ def _benchmark_forward(
     *,
     warmup_iterations: int,
     timed_iterations: int,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
+    measure_baseline: bool = True,
 ) -> dict[str, Any]:
     import torch
 
     use_cuda_events = _has_cuda_inputs(inputs)
     forward = _resolve_forward(so_path)
-    for _ in range(warmup_iterations):
+    # Capture one output for the benchmark-shape correctness check (this also
+    # serves as a warmup call).
+    custom_out = forward(*inputs)
+    for _ in range(max(0, warmup_iterations - 1)):
         forward(*inputs)
     _synchronize_if_cuda(torch, inputs)
     custom_ms = _time_callable_ms(
@@ -136,18 +148,28 @@ def _benchmark_forward(
     baseline_mode: str | None = None
     baseline_error: str | None = None
     eager_ms: float | None = None
+    benchmark_correct: bool = True
+    benchmark_max_abs_err: float | None = None
     if reference is not None:
-        eager_ms = _time_eager(
-            torch, reference, inputs,
-            warmup_iterations=warmup_iterations,
-            timed_iterations=timed_iterations,
-            use_cuda_events=use_cuda_events,
+        # Verify the kernel is CORRECT at the benchmark shape (one reference
+        # call) — correctness elsewhere only checks smaller shapes, so a kernel
+        # can be fast-but-wrong here. Cheap; independent of baseline timing.
+        ref_out = reference(*inputs)
+        benchmark_correct, benchmark_max_abs_err = _outputs_match(
+            custom_out, ref_out, rtol=rtol, atol=atol
         )
-        baseline_ms, baseline_mode, baseline_error = _measure_torch_compile_baseline(
-            torch, reference, inputs,
-            warmup_iterations=warmup_iterations,
-            timed_iterations=timed_iterations,
-        )
+        if measure_baseline:
+            eager_ms = _time_eager(
+                torch, reference, inputs,
+                warmup_iterations=warmup_iterations,
+                timed_iterations=timed_iterations,
+                use_cuda_events=use_cuda_events,
+            )
+            baseline_ms, baseline_mode, baseline_error = _measure_torch_compile_baseline(
+                torch, reference, inputs,
+                warmup_iterations=warmup_iterations,
+                timed_iterations=timed_iterations,
+            )
 
     return {
         "ok": True,
@@ -156,10 +178,42 @@ def _benchmark_forward(
         "baseline_mode": baseline_mode,
         "baseline_error": baseline_error,
         "eager_ms": eager_ms,
+        "benchmark_correct": benchmark_correct,
+        "benchmark_max_abs_err": benchmark_max_abs_err,
         "achieved_gbps": _achieved_gbps(inputs, custom_ms),
         "warmup_iterations": warmup_iterations,
         "timed_iterations": timed_iterations,
     }
+
+
+def _outputs_match(
+    custom_out: Any, ref_out: Any, *, rtol: float, atol: float
+) -> tuple[bool, float | None]:
+    """Return (matches, max_abs_err) comparing kernel output to the reference.
+
+    Non-finite output, shape mismatch, or values outside tolerance => not a match.
+    """
+    import torch
+
+    def _first_tensor(value: Any) -> Any:
+        if isinstance(value, (list, tuple)):
+            return value[0] if value else None
+        return value
+
+    custom = _first_tensor(custom_out)
+    ref = _first_tensor(ref_out)
+    if custom is None or ref is None or not hasattr(custom, "shape"):
+        return False, None
+    c = custom.detach().float()
+    r = ref.detach().float().to(c.device)
+    if tuple(c.shape) != tuple(r.shape):
+        return False, None
+    if not bool(torch.isfinite(c).all()):
+        return False, None
+    diff = (c - r).abs()
+    max_abs_err = float(diff.max().item()) if diff.numel() else 0.0
+    matches = bool(torch.allclose(c, r, rtol=rtol, atol=atol))
+    return matches, max_abs_err
 
 
 # torch.compile modes tried for the baseline. We benchmark the kernel against the

@@ -1,0 +1,1 @@
+Generate a CUDA kernel for fp32 square matrix multiply: C = A @ B, where A and B are both N x N fp32 matrices (row-major) and C is N x N fp32. Use a shared-memory TILED approach (e.g. 16x16 tiles) with register blocking for the inner accumulation. CUDA cores only (no tensor cores for fp32 here). Two input tensors A and B, both N x N, fp32.
