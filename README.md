@@ -4,7 +4,7 @@
 
 `cuda-engine` is a Python library and CLI that turns a natural-language description and a reference PyTorch function into a CUDA kernel that compiles, matches the reference within tolerance on a real GPU, and benchmarks against `torch.compile`. It uses Claude (Anthropic) for a 5-stage agent loop (interview → codegen → correctness → performance → polish) with Nsight-driven perf repair and Sonnet→Opus escalation when budgets bust.
 
-**Status:** **v1.1 released** ([on PyPI](https://pypi.org/project/cuda-engine/) — `pip install cuda-engine`). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers (OpenAI / Gemini / any OpenAI-compatible endpoint) + a bound-aware perf-repair loop. Elementwise/reduction/fused kernels are solid; GEMM/matmul is in progress (v2.0, on the `v2.0/gemm` branch).
+**Status:** **v1.2 released** ([on PyPI](https://pypi.org/project/cuda-engine/) — `pip install cuda-engine`). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers (OpenAI / Gemini / any OpenAI-compatible endpoint) + a bound-aware perf-repair loop; v1.2 added synthesis-stage resumability + cross-provider comparison. Elementwise/reduction/fused kernels are solid. GEMM/matmul (v2.0) is merged on `main` (not yet in a PyPI release): the fused-epilogue thesis is proven — `matmul_bias_gelu_fp16` runs **1.25×** vs torch's fused path, correct at 4096² — alongside trustworthy benchmarking that verifies correctness at the benchmark shape so a fast-but-wrong kernel can't post a speedup.
 
 ---
 
@@ -179,7 +179,7 @@ The internal regression suite has **42** hand-curated kernels covering elementwi
 - KernelBench external subset: **12/12 (100%)**, median **1.05×**.
 - Biggest wins: `topk_fp32` 12.5× (inductor falls back to a slow sort), `masked_mean` 2.6×, `cumulative_max` 1.45×, `softmax_lastdim` 1.33×. Bandwidth-bound elementwise ops sit at parity (torch.compile is already at the HBM roofline); the wins come from reductions/scans.
 
-v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark providers against each other (`compare-providers`). GEMM/matmul (v2.0) is in progress and not yet in these numbers.
+v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark providers against each other (`compare-providers`); v1.2 added resumability. GEMM/matmul (v2.0) is merged on `main` but out of this in-scope suite — its status is a separate track: `matmul_bias_gelu_fp16` **1.25×** (real fused-epilogue win vs torch's fused path, correct at 4096²), `matmul_fp32` 0.66×, and bare `matmul_fp16` is deliberately not pursued (naive tensor-core GEMM can't beat cuBLAS, and wasn't the goal). See [v2.0-gemm-rung4-evidence.md](docs/milestones/v2.0-gemm-rung4-evidence.md).
 
 **KernelBench external subset** (12 unseen, in-scope level1 ops): 9/9 functional on the kernels run so far (remaining 3 pending a credit top-up).
 
@@ -196,7 +196,7 @@ v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark 
 - **Eval suites:** 42-kernel internal regression + filtered KernelBench subset.
 
 ### Out of scope for v1
-- GEMM, matmul, attention kernels (CUTLASS and FlashAttention dominate; deferred to v2/v3).
+- GEMM, matmul, attention kernels (CUTLASS and FlashAttention dominate). GEMM is now being explored in v2.0 on `main` — fused epilogues win (1.25×), bare GEMM vs cuBLAS is not pursued; attention stays deferred to v3.
 - Multi-GPU, multi-node, rack-scale orchestration.
 - Formal verification (SMT race-freedom proofs).
 - Backward-pass kernel synthesis, autograd custom ops.
