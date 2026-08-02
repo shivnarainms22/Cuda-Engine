@@ -2,6 +2,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cuda_engine.models import CorrectnessReport, KernelArtifact, KernelSpec
+from cuda_engine.models.spec import TORCH_DTYPE_NAMES
 from cuda_engine.stages.base import Stage
 
 CORRECTNESS_SHAPES: tuple[tuple[int, ...], ...] = ((0,), (1,), (127,), (128,), (1024,), (4097,))
@@ -118,16 +119,7 @@ def _numel(shape: tuple[int, ...]) -> int:
 
 
 def _torch_dtype_name(dtype: str) -> str:
-    return {
-        "fp32": "float32",
-        "fp16": "float16",
-        "bf16": "bfloat16",
-        "fp64": "float64",
-        "int32": "int32",
-        "int64": "int64",
-        "uint8": "uint8",
-        "int8": "int8",
-    }[dtype]
+    return TORCH_DTYPE_NAMES[dtype]
 
 
 def _as_output_list(value: Any) -> list[Any]:

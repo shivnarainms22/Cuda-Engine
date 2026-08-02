@@ -8,6 +8,17 @@ from pydantic import BaseModel, ConfigDict, Field
 DType: TypeAlias = Literal["fp32", "fp16", "bf16", "fp64", "int32", "int64", "uint8", "int8"]
 TargetArch: TypeAlias = Literal["sm_80", "sm_90", "sm_100", "sm_120"]
 
+TORCH_DTYPE_NAMES: dict[str, str] = {
+    "fp32": "float32",
+    "fp16": "float16",
+    "bf16": "bfloat16",
+    "fp64": "float64",
+    "int32": "int32",
+    "int64": "int64",
+    "uint8": "uint8",
+    "int8": "int8",
+}
+
 
 class OptimizationPriority(StrEnum):
     LATENCY = "latency"

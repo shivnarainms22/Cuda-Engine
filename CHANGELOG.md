@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`torch.compile` compatibility for generated kernels** (`cuda_engine.torch_compat`).
+  Generated kernels registered a CUDA impl but no fake/meta impl, so they were
+  opaque to Dynamo: `torch.compile` graph-broke on the op (splitting the compiled
+  region and disqualifying it from CUDA graphs) and `torch.export`/AOTInductor
+  failed outright. The shape rule is now derived mechanically from the frozen
+  `KernelSpec` — no LLM involvement, so no new failure mode in the repair loop.
+  - `resolve_output_shapes()` binds symbols into one table shared across *all*
+    arguments, so `a:(M,K) @ b:(K,N) -> (M,N)` resolves — a case the correctness
+    stage's per-argument binding cannot express.
+  - Unresolvable specs raise `ShapeResolutionError` rather than guessing a shape.
+  - `SymInt`-safe: sizes are never coerced with `int()`, so `dynamic=True` does
+    not recompile.
+  - `render_fake_module()` emits the same logic as standalone source (importing
+    only `torch`) for shipping inside an exported kernel package.
+  - Verified on CPU-only torch with no GPU and no API spend, including a negative
+    control proving the `fullgraph=True` acceptance test can fail.
+
 ### Changed / hardened
 - **Trustworthy perf benchmarking.** The benchmark now verifies the kernel's
   output against the reference *at the benchmark shape*, so a kernel that is fast
