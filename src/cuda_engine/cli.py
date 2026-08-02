@@ -37,6 +37,45 @@ def latest_report(runs_root: Path) -> None:
     _print_report_summary(report_path)
 
 
+@app.command("export")
+def export_cmd(
+    run_id: Annotated[str, typer.Argument(help="The run_id to export.")],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Destination directory for the kernel package."),
+    ] = ...,  # type: ignore[assignment]
+    runs_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--runs-root",
+            help="Artifact root holding the run. Defaults to ~/.cache/cuda_engine/runs/.",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Export even if the correctness gate did not pass. The package is "
+            "stamped UNVERIFIED.",
+        ),
+    ] = False,
+) -> None:
+    """Export a verified run as a self-contained, installable kernel package."""
+    from cuda_engine.export import ExportError, write_export
+    from cuda_engine.services.store.local_dir import LocalDirStore
+
+    cfg = SynthesisConfig(artifact_root=str(runs_root)) if runs_root is not None else SynthesisConfig()
+    store = LocalDirStore(cfg)
+    try:
+        dest = write_export(store, run_id, out, force=force)
+    except ExportError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"exported {run_id} -> {dest}")
+    typer.echo(f"  evidence: {dest / 'VERIFICATION.md'}")
+    typer.echo(f"  install:  pip install {dest}")
+
+
 @app.command("synthesize")
 def synthesize_cmd(
     prompt: Annotated[

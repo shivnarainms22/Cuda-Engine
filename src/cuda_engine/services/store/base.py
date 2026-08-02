@@ -36,6 +36,11 @@ class ArtifactStore(ABC):
     def read_text(self, run_id: str, rel_path: str) -> str:
         raise NotImplementedError
 
+    @abstractmethod
+    def read_bytes(self, run_id: str, rel_path: str) -> bytes:
+        """Read a binary artifact (e.g. a compiled .so) written by this store."""
+        raise NotImplementedError
+
     def rel_path_of(self, run_id: str, path: Path) -> str | None:
         """The rel_path of an artifact path within this run, or None if the path
         is not under this store's run dir (i.e. a plain filesystem path a caller

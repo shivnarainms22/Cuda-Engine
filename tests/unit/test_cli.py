@@ -438,3 +438,83 @@ def _run_dir(name: str) -> Path:
     run_dir = Path(".test_artifacts") / "cli-tests" / f"{name}-{uuid.uuid4().hex[:8]}"
     run_dir.mkdir(parents=True)
     return run_dir
+
+
+def _seed_export_run(root: Path, run_id: str, *, correctness_passed: bool = True) -> None:
+    """Write the minimum of a real run directory that `export` reads."""
+    run_dir = root / run_id
+    (run_dir / "stage5_polish" / "final").mkdir(parents=True, exist_ok=True)
+    spec = {
+        "name": "vector_add_fp32",
+        "target_arch": "sm_80",
+        "inputs": [
+            {"name": "a", "dtype": "fp32", "shape": ["N"], "layout_hint": "any"},
+            {"name": "b", "dtype": "fp32", "shape": ["N"], "layout_hint": "any"},
+        ],
+        "outputs": [{"name": "y", "dtype": "fp32", "shape": ["N"], "layout_hint": "any"}],
+        "precision_tolerance": {"rtol": 1e-3, "atol": 1e-3},
+        "optimization_priority": "balanced",
+        "notes": "",
+    }
+    correctness = {
+        "passed": correctness_passed,
+        "max_abs_err": 0.0,
+        "max_rel_err": 0.0,
+        "shapes_tested": [[1024]],
+        "shape_results": [],
+        "failing_inputs": [],
+    }
+    (run_dir / "report.json").write_text(
+        json.dumps(
+            {
+                "passed": correctness_passed,
+                "run_id": run_id,
+                "artifacts_dir": str(run_dir),
+                "report": {
+                    "run_id": run_id,
+                    "spec_name": "vector_add_fp32",
+                    "stages_executed": ["polish"],
+                },
+                "correctness": correctness,
+                "performance": {"speedup_vs_torch_compile": 1.01, "below_target": False},
+            }
+        )
+    )
+    (run_dir / "checkpoint.json").write_text(
+        json.dumps({"inputs_fingerprint": "f", "completed_stages": ["polish"], "objects": {"spec": spec}})
+    )
+    (run_dir / "stage5_polish" / "final" / "kernel.cu").write_text("// kernel\n")
+
+
+def test_export_writes_a_kernel_package(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _seed_export_run(runs_root, "run1")
+    dest = tmp_path / "pkg"
+    result = CliRunner().invoke(
+        app, ["export", "run1", "--runs-root", str(runs_root), "--out", str(dest)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (dest / "ce_vector_add_fp32" / "kernel.cu").is_file()
+    assert (dest / "VERIFICATION.md").is_file()
+
+
+def test_export_refuses_an_unverified_run(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _seed_export_run(runs_root, "bad", correctness_passed=False)
+    result = CliRunner().invoke(
+        app, ["export", "bad", "--runs-root", str(runs_root), "--out", str(tmp_path / "pkg")]
+    )
+    assert result.exit_code != 0
+    assert "correctness" in result.output
+
+
+def test_export_force_overrides_and_marks_unverified(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _seed_export_run(runs_root, "bad", correctness_passed=False)
+    dest = tmp_path / "pkg"
+    result = CliRunner().invoke(
+        app,
+        ["export", "bad", "--runs-root", str(runs_root), "--out", str(dest), "--force"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "UNVERIFIED" in (dest / "VERIFICATION.md").read_text(encoding="utf-8")

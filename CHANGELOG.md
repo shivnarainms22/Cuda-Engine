@@ -24,6 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Verified on CPU-only torch with no GPU and no API spend, including a negative
     control proving the `fullgraph=True` acceptance test can fail.
 
+- **`cuda-engine export <run_id> --out <dir>`** — turn a verified run into a
+  self-contained, `pip install`able kernel package. A run previously ended as a
+  `.cu` inside a cache directory; using it meant hand-writing a
+  `cpp_extension.load` call, hand-registering a fake impl, and re-deriving from
+  JSON what had actually been verified.
+  - The package registers the fake impl on import, so it composes inside
+    `torch.compile` without a graph break.
+  - Ships source and JIT-builds on first use, preferring a bundled `.so` when it
+    loads — a source build is an honest fallback where a mismatched binary is a
+    confusing symbol error.
+  - Refuses to export a kernel whose correctness gate did not pass; `--force`
+    overrides but stamps the package `UNVERIFIED`. There is no silent path to an
+    unmarked unverified package.
+  - `VERIFICATION.md` records the evidence *and the negative space* — which
+    architecture was actually exercised, which shapes, which tolerances, which
+    `torch.compile` baseline mode the speedup was measured against, and what was
+    not tested at all.
+- `ArtifactStore.read_bytes` — binary artifacts are now readable through the
+  store interface instead of via a private attribute poke.
+
 ### Changed / hardened
 - **Trustworthy perf benchmarking.** The benchmark now verifies the kernel's
   output against the reference *at the benchmark shape*, so a kernel that is fast
