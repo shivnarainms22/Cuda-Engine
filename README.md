@@ -1,10 +1,18 @@
 # cuda-engine
 
-> Plain English + a slow PyTorch reference → a verified, benchmarked, annotated CUDA kernel.
+> Plain English + a PyTorch reference → a verified, benchmarked CUDA kernel you can `pip install` and `torch.compile`.
 
-`cuda-engine` is a Python library and CLI that turns a natural-language description and a reference PyTorch function into a CUDA kernel that compiles, matches the reference within tolerance on a real GPU, and benchmarks against `torch.compile`. It uses Claude (Anthropic) for a 5-stage agent loop (interview → codegen → correctness → performance → polish) with Nsight-driven perf repair and Sonnet→Opus escalation when budgets bust.
+`cuda-engine` turns a natural-language description and a reference PyTorch function into a CUDA kernel that compiles, matches the reference within tolerance on a real GPU, and beats `torch.compile` at its best mode — then packages it as an installable Python module that composes inside a compiled graph.
 
-**Status:** **v1.2 released** ([on PyPI](https://pypi.org/project/cuda-engine/) — `pip install cuda-engine`). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers (OpenAI / Gemini / any OpenAI-compatible endpoint) + a bound-aware perf-repair loop; v1.2 added synthesis-stage resumability + cross-provider comparison. Elementwise/reduction/fused kernels are solid. GEMM/matmul (v2.0) is merged on `main` (not yet in a PyPI release): the fused-epilogue thesis is proven — `matmul_bias_gelu_fp16` runs **1.25×** vs torch's fused path, correct at 4096² — alongside trustworthy benchmarking that verifies correctness at the benchmark shape so a fast-but-wrong kernel can't post a speedup.
+It uses a 5-stage LLM agent loop (interview → codegen → correctness → performance → polish) with Nsight-driven perf repair. Claude is the default; OpenAI, Gemini, and any OpenAI-compatible endpoint work too.
+
+**The part most kernel-generation tools skip: proving the number is real.** LLMs are very good at producing kernels that look fast and are wrong. This project's measurement harness is built to catch its own false positives, and has repeatedly done so — see [Why you can trust the numbers](#why-you-can-trust-the-numbers).
+
+```bash
+pip install cuda-engine
+cuda-engine synthesize --prompt "fp16 RMSNorm over the last dimension" --reference rms_norm.py
+cuda-engine export <run_id> --out ./my_kernel   # installable, torch.compile-ready
+```
 
 ---
 
@@ -79,6 +87,9 @@ cuda-engine eval --suite internal --out evals/results/openai --model-id openai:g
 
 # Compare providers: which model writes the best CUDA? (combines prior runs, no cost)
 cuda-engine compare-providers evals/results/anthropic evals/results/openai --out compare.md
+
+# Export a verified run as an installable, torch.compile-ready package
+cuda-engine export <run_id> --out ./my_kernel
 ```
 
 `path/to/rms_norm.py` should define either a top-level `REFERENCE` variable or a top-level `reference()` function.
@@ -122,6 +133,58 @@ config = SynthesisConfig(
 Set the matching key in the environment (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
 or your OpenAI-compatible endpoint's key). A bare model id with no `provider:`
 prefix routes to Anthropic.
+
+---
+
+## Shipping the kernel
+
+A run directory is a result. `export` turns it into a dependency:
+
+```bash
+cuda-engine export <run_id> --out ./my_kernel
+pip install ./my_kernel
+```
+
+```python
+import torch
+from ce_rms_norm_fp16 import forward
+
+out = forward(x)
+
+# Composes inside a compiled graph -- no graph break:
+compiled = torch.compile(lambda t: forward(t) * 2, fullgraph=True)
+```
+
+The package registers a **fake (meta) implementation** derived mechanically from the frozen `KernelSpec`, which is what makes `torch.compile`, `torch.export`, and AOTInductor work. A custom CUDA op without one is opaque to Dynamo: it graph-breaks, splitting the compiled region and disqualifying it from CUDA graphs.
+
+It ships the kernel source and JIT-builds on first use (preferring a bundled `.so` when it loads), plus:
+
+- `VERIFICATION.md` — what was verified, and **what was not**
+- `spec.json` — the frozen input/output contract
+- `manifest.json` — which kernel shipped (polished or fallback), run id, provenance
+
+`export` **refuses** a run whose correctness gate did not pass. `--force` overrides it but stamps the package `UNVERIFIED`; there is no silent path to an unmarked unverified package.
+
+---
+
+## Why you can trust the numbers
+
+Most published kernel-generation results are single speedup figures with no way to check them. Speedups here are built to survive scrutiny, because the harness is designed to fail loudly:
+
+- **Correctness is a hard gate.** Outputs are compared elementwise against the PyTorch reference at multiple shapes — including awkward ones (0, 1, 127, 4097) — on real hardware. A kernel that misses tolerance fails outright.
+- **The baseline is torch.compile at its *best*.** The fastest of `default` / `max-autotune-no-cudagraphs` / `reduce-overhead`, not the first mode tried. Beating a deliberately weak baseline is easy, so the harness refuses to use one.
+- **Correctness is re-verified at the benchmark shape.** Kernels frequently pass at 1024² and break at 4096² (index overflow, tiling edges). A kernel that is wrong at the shape it was timed at cannot post a speedup.
+- **Every export states its negative space.** `VERIFICATION.md` lists the single architecture actually exercised, the exact shapes tested, the tolerances, and what was never checked — other shapes, non-contiguous layouts, streams, backward. A document that only lists successes is marketing.
+
+This is not theoretical. The harness has caught its own false positives:
+
+| What was claimed | What was true | How it was caught |
+|---|---|---|
+| `sigmoid_mul` 9.7× | ~parity | Baseline was `torch.compile`'s *slowest* mode at too-small N ([`21f3b2b`](https://github.com/shivnarainms22/Cuda-Engine/commit/21f3b2b)) |
+| `matmul_bias_gelu` 1.11×, `matmul_fp32` 0.91× | both wrong at the benchmark shape | Correctness-at-benchmark-shape gate; both were correct at ≤1024² and garbage at 4096² |
+| WMMA codegen guidance would help fp16 GEMM | traded a real 1.25× win for a pass on an unwinnable kernel | Measured, found to be a net regression, and reverted |
+
+Published numbers below are post-fix and honest, including the ones that lost.
 
 ---
 
@@ -184,6 +247,24 @@ v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark 
 **KernelBench external subset** (12 unseen, in-scope level1 ops): 12/12 functional, hand-translated with no overlap with the internal suite.
 
 > An earlier baseline bug measured against `torch.compile`'s *slowest* mode (reduce-overhead) at too-small N, which inflated speedups (one kernel read 9.7× when the honest number is ~parity). Fixed in commit `21f3b2b`; all numbers above use the corrected best-mode baseline.
+
+---
+
+## Status
+
+**v1.2 released** ([PyPI](https://pypi.org/project/cuda-engine/)). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers and a bound-aware perf-repair loop; v1.2 added synthesis-stage resumability and cross-provider comparison.
+
+Merged on `main`, not yet in a PyPI release:
+
+- **GEMM (v2.0).** The fused-epilogue thesis holds: `matmul_bias_gelu_fp16` at **1.25×** vs torch's fused path, correct at 4096². Bare fp16 GEMM vs cuBLAS is explicitly *not* pursued — naive tensor-core GEMM lands around 10% of peak and that was never the goal.
+- **`torch.compile` compatibility + `export`** — the deployability work described above.
+
+### Honest limits
+
+- Runtime verification is **sm_80 (A100) only**. `sm_90`/`sm_100` are codegen targets that have never been executed. If you are on Blackwell, treat this as unverified.
+- Synthesis costs API tokens (~$0.10–2.00 per kernel) and needs a GPU with `nvcc`.
+- Bandwidth-bound elementwise ops sit at parity — `torch.compile` is already at the HBM roofline there, so ~1.0× is the physical ceiling, not a defect. Real wins come from reductions, scans, and fusions.
+- Forward pass only. No autograd formulas are generated.
 
 ---
 
