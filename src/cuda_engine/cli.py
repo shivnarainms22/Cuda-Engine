@@ -589,3 +589,7 @@ def _print_polish_artifacts(run_dir: Path) -> None:
         kernel_path = Path(str(raw_path)) if raw_path else kernel_path
     if kernel_path.exists() or status.get("kernel_cu_path"):
         typer.echo(f"Polished kernel: {kernel_path}")
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via subprocess in tests
+    app()

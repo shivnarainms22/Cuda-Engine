@@ -518,3 +518,32 @@ def test_export_force_overrides_and_marks_unverified(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "UNVERIFIED" in (dest / "VERIFICATION.md").read_text(encoding="utf-8")
+
+
+def test_module_entrypoint_runs_the_app() -> None:
+    """`python -m cuda_engine.cli` must run the CLI, not silently exit 0."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cuda_engine.cli", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "export" in result.stdout
+
+
+def test_module_entrypoint_reports_failure_for_a_missing_run(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cuda_engine.cli", "export", "nope",
+         "--runs-root", str(tmp_path), "--out", str(tmp_path / "o")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0

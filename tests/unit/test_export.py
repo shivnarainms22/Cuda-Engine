@@ -302,3 +302,35 @@ def test_write_export_refuses_a_non_empty_destination(tmp_path: Path) -> None:
     (dest / "important.txt").write_text("do not clobber")
     with pytest.raises(ExportError, match="not empty"):
         write_export(store, run_id, dest)
+
+
+# --- build flags must match what was verified ------------------------------
+
+
+def test_manifest_records_the_nvcc_flags_the_kernel_was_built_with() -> None:
+    import json
+
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store.write_json(run_id, "inputs/config.json", {"nvcc_flags": ["-O3", "--use_fast_math"]})
+    manifest = json.loads(build_export(store, run_id)["ce_rms_norm_fp16/manifest.json"])
+    assert manifest["nvcc_flags"] == ["-O3", "--use_fast_math"]
+
+
+def test_loader_builds_with_the_recorded_nvcc_flags() -> None:
+    """A package built with different flags than were measured is not the same kernel."""
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store.write_json(run_id, "inputs/config.json", {"nvcc_flags": ["-O3", "--use_fast_math"]})
+    init = build_export(store, run_id)["ce_rms_norm_fp16/__init__.py"]
+    assert "extra_cuda_cflags" in init
+    assert "--use_fast_math" in init
+
+
+def test_missing_config_falls_back_to_documented_defaults() -> None:
+    import json
+
+    store = InMemoryStore()
+    run_id = _populate(store)  # no inputs/config.json written
+    manifest = json.loads(build_export(store, run_id)["ce_rms_norm_fp16/manifest.json"])
+    assert manifest["nvcc_flags"] == ["-O3", "--use_fast_math"]
