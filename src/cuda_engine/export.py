@@ -26,11 +26,18 @@ from cuda_engine.torch_compat import render_fake_module
 
 __all__ = ["ExportError", "build_export", "package_name", "write_export"]
 
-#: Candidate kernel sources, most-preferred first. The polished kernel only exists
-#: when the annotated source recompiled *and* re-passed correctness.
+#: Fallback kernel sources, most-preferred first, used only when the run did not
+#: record an artifact path. The polished kernel exists only when the annotated
+#: source recompiled *and* re-passed correctness; codegen writes its accepted
+#: kernel to ``{artifact_prefix}/final/kernel.cu`` (see stages/codegen.py).
+#:
+#: This list cannot be exhaustive -- repair attempts live under
+#: ``stage3_repair/attempt_NN/codegen/final/`` -- which is why the recorded
+#: artifact path is consulted first.
 _KERNEL_CANDIDATES = (
     "stage5_polish/final/kernel.cu",
-    "stage2_codegen/kernel.cu",
+    "stage2_codegen/final/kernel.cu",
+    "stage2_codegen/escalated/final/kernel.cu",
 )
 
 _PREBUILT_SO = "stage5_polish/final/kernel.so"
@@ -76,12 +83,46 @@ def _load_spec(store: ArtifactStore, run_id: str) -> KernelSpec:
         raise ExportError(f"run {run_id!r} has an unreadable KernelSpec: {exc}") from exc
 
 
+def _recorded_kernel_rel_path(store: ArtifactStore, run_id: str) -> str | None:
+    """The kernel path the run itself recorded as accepted, as a store-relative path.
+
+    This is authoritative: repair and escalation write kernels to paths no fixed
+    candidate list can enumerate (``stage3_repair/attempt_NN/codegen/final/``).
+
+    The recorded path is absolute and from the machine that produced the run, so a
+    run copied to Drive will not match the current root. Recover the tail after the
+    run id in that case rather than giving up.
+    """
+    try:
+        checkpoint = store.read_json(run_id, "checkpoint.json")
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    recorded = ((checkpoint or {}).get("objects", {}).get("artifact") or {}).get("kernel_cu_path")
+    if not isinstance(recorded, str) or not recorded:
+        return None
+
+    rel = store.rel_path_of(run_id, Path(recorded))
+    if rel is not None and store.exists(run_id, rel):
+        return rel
+
+    parts = Path(recorded).as_posix().split("/")
+    if run_id in parts:
+        tail = "/".join(parts[len(parts) - 1 - parts[::-1].index(run_id) + 1 :])
+        if tail and store.exists(run_id, tail):
+            return tail
+    return None
+
+
 def _select_kernel(store: ArtifactStore, run_id: str) -> tuple[str, str]:
+    recorded = _recorded_kernel_rel_path(store, run_id)
+    if recorded is not None:
+        return recorded, store.read_text(run_id, recorded)
     for rel_path in _KERNEL_CANDIDATES:
         if store.exists(run_id, rel_path):
             return rel_path, store.read_text(run_id, rel_path)
     raise ExportError(
-        f"run {run_id!r} has no kernel source at any of {list(_KERNEL_CANDIDATES)}"
+        f"run {run_id!r} has no kernel source: no accepted artifact path recorded in "
+        f"checkpoint.json, and none of {list(_KERNEL_CANDIDATES)} exist"
     )
 
 

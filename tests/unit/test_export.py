@@ -5,6 +5,7 @@ Runs on CPU-only torch with no nvcc and no LLM call.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -87,7 +88,7 @@ def _populate(
     if polished:
         store.write_text(run_id, "stage5_polish/final/kernel.cu", KERNEL_SRC)
     else:
-        store.write_text(run_id, "stage2_codegen/kernel.cu", KERNEL_SRC)
+        store.write_text(run_id, "stage2_codegen/final/kernel.cu", KERNEL_SRC)
     if with_so:
         store.write_bytes(run_id, "stage5_polish/final/kernel.so", b"\x7fELF-not-real")
     return run_id
@@ -201,7 +202,7 @@ def test_falls_back_to_codegen_kernel_and_records_it() -> None:
     run_id = _populate(store, polished=False)
     files = build_export(store, run_id)
     manifest = json.loads(files["ce_rms_norm_fp16/manifest.json"])
-    assert manifest["source_kernel"] == "stage2_codegen/kernel.cu"
+    assert manifest["source_kernel"] == "stage2_codegen/final/kernel.cu"
 
 
 def test_manifest_records_whether_a_prebuilt_so_is_included() -> None:
@@ -334,3 +335,67 @@ def test_missing_config_falls_back_to_documented_defaults() -> None:
     run_id = _populate(store)  # no inputs/config.json written
     manifest = json.loads(build_export(store, run_id)["ce_rms_norm_fp16/manifest.json"])
     assert manifest["nvcc_flags"] == ["-O3", "--use_fast_math"]
+
+
+# --- the accepted kernel is whatever the run recorded, not a guessed path ----
+
+
+def _with_artifact(store: InMemoryStore, run_id: str, recorded_path: str) -> None:
+    checkpoint = store.read_json(run_id, "checkpoint.json")
+    checkpoint["objects"]["artifact"] = {"kernel_cu_path": recorded_path}
+    store.write_json(run_id, "checkpoint.json", checkpoint)
+
+
+def test_uses_the_kernel_path_the_run_actually_recorded() -> None:
+    """Repair/escalation kernels live under paths no candidate list can enumerate."""
+    import json
+
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store.write_text(run_id, "stage3_repair/attempt_01/codegen/final/kernel.cu", "// repaired\n")
+    _with_artifact(store, run_id, f"<memory>/{run_id}/stage3_repair/attempt_01/codegen/final/kernel.cu")
+    files = build_export(store, run_id)
+    assert files["ce_rms_norm_fp16/kernel.cu"] == "// repaired\n"
+    manifest = json.loads(files["ce_rms_norm_fp16/manifest.json"])
+    assert manifest["source_kernel"] == "stage3_repair/attempt_01/codegen/final/kernel.cu"
+
+
+def test_recorded_path_from_another_machine_still_resolves() -> None:
+    """Runs get moved to Drive; the absolute path recorded at synthesis time won't match."""
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store.write_text(run_id, "stage3_repair/attempt_00/codegen/final/kernel.cu", "// moved\n")
+    _with_artifact(
+        store, run_id,
+        f"/some/other/machine/runs/{run_id}/stage3_repair/attempt_00/codegen/final/kernel.cu",
+    )
+    assert build_export(store, run_id)["ce_rms_norm_fp16/kernel.cu"] == "// moved\n"
+
+
+def test_recorded_path_that_does_not_exist_falls_back_to_candidates() -> None:
+    store = InMemoryStore()
+    run_id = _populate(store)
+    _with_artifact(store, run_id, f"<memory>/{run_id}/stage9_nope/kernel.cu")
+    assert build_export(store, run_id)["ce_rms_norm_fp16/kernel.cu"] == KERNEL_SRC
+
+
+def test_escalated_codegen_kernel_is_a_candidate() -> None:
+    import json
+
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store._files.pop((run_id, "stage5_polish/final/kernel.cu"))
+    store.write_text(run_id, "stage2_codegen/escalated/final/kernel.cu", "// escalated\n")
+    files = build_export(store, run_id)
+    assert files["ce_rms_norm_fp16/kernel.cu"] == "// escalated\n"
+    assert json.loads(files["ce_rms_norm_fp16/manifest.json"])["source_kernel"] == (
+        "stage2_codegen/escalated/final/kernel.cu"
+    )
+
+
+def test_error_names_every_location_that_was_tried() -> None:
+    store = InMemoryStore()
+    run_id = _populate(store)
+    store._files.pop((run_id, "stage5_polish/final/kernel.cu"))
+    with pytest.raises(ExportError, match=re.escape("stage2_codegen/final/kernel.cu")):
+        build_export(store, run_id)
