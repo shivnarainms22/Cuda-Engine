@@ -108,6 +108,38 @@ def _matches(torch: Any, actual: Any, expected: Any, *, rtol: float, atol: float
     )
 
 
+def _err_stats(torch: Any, actual: Any, expected: Any) -> tuple[float, float]:
+    """Max absolute and relative error, so the report carries magnitudes not a boolean."""
+    max_abs, max_rel = 0.0, 0.0
+    for x, y in zip(_as_list(actual), _as_list(expected), strict=False):
+        if not x.is_floating_point():
+            continue
+        diff = (x.float() - y.float().to(x.device)).abs()
+        if diff.numel() == 0:
+            continue
+        max_abs = max(max_abs, float(diff.max().item()))
+        denom = y.float().to(x.device).abs().clamp_min(1e-12)
+        max_rel = max(max_rel, float((diff / denom).max().item()))
+    return max_abs, max_rel
+
+
+def _perturb(torch: Any, expected: Any, *, rtol: float, atol: float) -> list[Any]:
+    """A wrong answer that MUST fall outside the tolerance band.
+
+    A fixed additive nudge does not work: `allclose` compares against
+    `atol + rtol * |expected|`, so on a GEMM whose outputs are ~1e12 with
+    rtol=1e-3 the band is ~1e9 and adding 1.0 is invisible. The perturbation has
+    to scale with the value, plus an absolute floor for outputs that are all zero.
+    """
+    out = []
+    for t in _as_list(expected):
+        if t.is_floating_point():
+            out.append(t * (1.0 + 1000.0 * max(rtol, 1e-9)) + 1000.0 * max(atol, 1e-9))
+        else:
+            out.append(t + 1)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", required=True, help="Installed package name, e.g. ce_rms_norm_fp16")
@@ -151,14 +183,26 @@ def main() -> int:
     expected = reference(*inputs)
     rtol = spec["precision_tolerance"]["rtol"]
     atol = spec["precision_tolerance"]["atol"]
+    max_abs, max_rel = _err_stats(torch, out, expected)
     if not _matches(torch, out, expected, rtol=rtol, atol=atol):
-        raise CheckFailed(f"output does not match the reference within rtol={rtol} atol={atol}")
-    record("matches reference", f"rtol={rtol} atol={atol} size={args.size}")
+        raise CheckFailed(
+            f"output does not match the reference within rtol={rtol} atol={atol} "
+            f"(max_abs_err={max_abs:.3g}, max_rel_err={max_rel:.3g})"
+        )
+    # Report magnitudes, not a boolean. On a GEMM with large outputs the absolute
+    # error is huge and meaningless; the relative error is the number that matters.
+    record(
+        "matches reference",
+        f"max_rel_err={max_rel:.3g} (rtol={rtol}), max_abs_err={max_abs:.3g}, size={args.size}",
+    )
 
     # 3b. control: the comparison must be able to fail, or step 3 proves nothing
-    perturbed = [t + 1.0 if t.is_floating_point() else t for t in _as_list(expected)]
+    perturbed = _perturb(torch, expected, rtol=rtol, atol=atol)
     if _matches(torch, out, perturbed, rtol=rtol, atol=atol):
-        raise CheckFailed("control failed: comparison accepts a deliberately wrong answer")
+        raise CheckFailed(
+            "control failed: the comparison accepts a deliberately wrong answer, so the "
+            "correctness pass above is vacuous at this magnitude"
+        )
     record("control: comparison rejects a wrong answer")
 
     # 4. the reason the fake impl exists -- no graph break

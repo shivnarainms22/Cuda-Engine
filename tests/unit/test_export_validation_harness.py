@@ -109,3 +109,60 @@ def test_clean_process_guard_passes_when_the_generator_is_absent(monkeypatch: An
     h = _harness()
     monkeypatch.delitem(sys.modules, "cuda_engine", raising=False)
     h._assert_clean_process()  # must not raise
+
+
+# --- the control must work at GEMM magnitudes, not just near 1.0 -------------
+
+
+def test_perturbation_is_detected_at_gemm_magnitudes() -> None:
+    """Regression: a +1.0 nudge is invisible when outputs are ~1e11 and rtol=1e-3.
+
+    Real numbers from the matmul_fp32 run: outputs ~1e11, so the tolerance band is
+    rtol*|expected| ~1e8. The control must scale with the value.
+    """
+    h = _harness()
+    expected = torch.full((4, 4), 2.0e11, dtype=torch.float32)
+    actual = expected.clone()
+    bad = h._perturb(torch, expected, rtol=1e-3, atol=1e-3)
+    assert not h._matches(torch, actual, bad, rtol=1e-3, atol=1e-3)
+
+
+def test_old_additive_perturbation_would_have_been_missed() -> None:
+    """Pins the exact defect the A100 control caught, so it cannot come back."""
+    h = _harness()
+    expected = torch.full((4, 4), 2.0e11, dtype=torch.float32)
+    naive_bad = expected + 1.0
+    assert h._matches(torch, expected, naive_bad, rtol=1e-3, atol=1e-3), (
+        "premise: +1.0 is inside the band at this magnitude"
+    )
+
+
+def test_perturbation_is_detected_near_unit_magnitude() -> None:
+    h = _harness()
+    expected = torch.tensor([[0.5, -1.25]], dtype=torch.float16)
+    bad = h._perturb(torch, expected, rtol=1e-3, atol=1e-3)
+    assert not h._matches(torch, expected, bad, rtol=1e-3, atol=1e-3)
+
+
+def test_perturbation_is_detected_for_all_zero_output() -> None:
+    """Scaling alone cannot perturb zeros; an absolute floor is required."""
+    h = _harness()
+    expected = torch.zeros(3, 3)
+    bad = h._perturb(torch, expected, rtol=1e-3, atol=1e-3)
+    assert not h._matches(torch, expected, bad, rtol=1e-3, atol=1e-3)
+
+
+def test_perturbation_is_detected_for_integer_outputs() -> None:
+    h = _harness()
+    expected = torch.arange(6, dtype=torch.int64)
+    bad = h._perturb(torch, expected, rtol=1e-3, atol=1e-3)
+    assert not h._matches(torch, expected, bad, rtol=1e-3, atol=1e-3)
+
+
+def test_error_stats_report_relative_not_just_absolute() -> None:
+    h = _harness()
+    expected = torch.full((2, 2), 1.0e12, dtype=torch.float32)
+    actual = expected * 1.000001
+    max_abs, max_rel = h._err_stats(torch, actual, expected)
+    assert max_abs > 1e5, "absolute error is large and on its own meaningless"
+    assert max_rel < 1e-4, "relative error is the number that matters"
