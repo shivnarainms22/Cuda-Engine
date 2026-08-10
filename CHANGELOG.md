@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-09
+
+Deployability. A generated kernel is now something you can install and depend on,
+not just a `.cu` in a cache directory. Backward-compatible.
+
 ### Added
 - **`torch.compile` compatibility for generated kernels** (`cuda_engine.torch_compat`).
   Generated kernels registered a CUDA impl but no fake/meta impl, so they were
@@ -60,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ArtifactStore.read_bytes` — binary artifacts are now readable through the
   store interface instead of via a private attribute poke.
 
+### Fixed
+- `cuda_engine.__version__` was hardcoded to `"0.0.1"` through the 1.0–1.2
+  releases while PyPI served the real version. It is now read from the
+  distribution metadata, so it cannot drift from `pyproject.toml` again.
+
 ### Changed / hardened
 - **Trustworthy perf benchmarking.** The benchmark now verifies the kernel's
   output against the reference *at the benchmark shape*, so a kernel that is fast
@@ -97,6 +107,7 @@ Backward-compatible. Robustness + observability.
   error is now reported as a `stage_failure` (the engine cleanly gave up inside a
   stage), not `runner_error` (which wrongly implied infra flakiness).
 
+[1.3.0]: https://github.com/shivnarainms22/Cuda-Engine/releases/tag/v1.3.0
 [1.2.0]: https://github.com/shivnarainms22/Cuda-Engine/releases/tag/v1.2.0
 
 ## [1.1.0] - 2026-06-29
