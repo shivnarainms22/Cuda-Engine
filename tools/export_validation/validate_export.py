@@ -29,6 +29,48 @@ from pathlib import Path
 _HERE = Path(__file__).parent
 
 
+def _perf_args(run_dir: Path) -> list[str]:
+    """Build the perf-comparison arguments from what the run itself recorded.
+
+    The benchmark shape comes from the engine's own ``_benchmark_shape`` rather than
+    being re-derived here, and the timings come from the run's ``benchmark.json``, so
+    the exported kernel is compared against the original measurement on its own terms.
+    Unlike the standalone check, this driver may import cuda_engine.
+    """
+    bench_path = run_dir / "stage4_performance" / "benchmark.json"
+    checkpoint_path = run_dir / "checkpoint.json"
+    if not bench_path.is_file() or not checkpoint_path.is_file():
+        print("  (no stage4_performance/benchmark.json -- skipping perf comparison)")
+        return []
+
+    try:
+        from cuda_engine.models import KernelSpec
+        from cuda_engine.stages.performance import _benchmark_shape
+    except ImportError:
+        print("  (cuda_engine unavailable -- skipping perf comparison)")
+        return []
+
+    bench = json.loads(bench_path.read_text(encoding="utf-8"))
+    spec_raw = json.loads(checkpoint_path.read_text(encoding="utf-8")).get("objects", {}).get("spec")
+    if spec_raw is None:
+        return []
+
+    settings = bench.get("settings") or {}
+    total = settings.get("performance_shape_n")
+    if not isinstance(total, int):
+        print("  (run did not record performance_shape_n -- skipping perf comparison)")
+        return []
+
+    shape = _benchmark_shape(KernelSpec.model_validate(spec_raw), total_elements=total)
+    out = ["--bench-size", str(shape[0])]
+    for flag, key in (("--warmup", "benchmark_warmup_iterations"), ("--iters", "benchmark_timed_iterations")):
+        if isinstance(settings.get(key), int):
+            out += [flag, str(settings[key])]
+    if isinstance(bench.get("custom_ms"), (int, float)):
+        out += ["--expect-ms", str(bench["custom_ms"])]
+    return out
+
+
 def _cli() -> list[str]:
     """The cuda-engine CLI, preferring the console script a user would actually run."""
     script = shutil.which("cuda-engine")
@@ -53,6 +95,11 @@ def main() -> int:
     )
     parser.add_argument("--size", type=int, default=256)
     parser.add_argument("--keep", action="store_true", help="Keep the exported package directory.")
+    parser.add_argument(
+        "--no-perf",
+        action="store_true",
+        help="Skip re-measuring performance against the original run.",
+    )
     args = parser.parse_args()
 
     runs_root = args.runs_root or (Path.home() / ".cache" / "cuda_engine" / "runs")
@@ -94,10 +141,15 @@ def main() -> int:
 
     _run([sys.executable, "-m", "pip", "install", "--no-build-isolation", str(pkg_dir)], label="pip install")
 
+    perf_args = _perf_args(run_dir) if not args.no_perf else []
+    if perf_args:
+        print(f"  perf compare   : {' '.join(perf_args)}")
+
     print("\n--- standalone check (fresh process, no cuda_engine) ---")
     check = subprocess.run(
         [sys.executable, str(_HERE / "standalone_check.py"),
-         "--package", package, "--reference", str(reference), "--size", str(args.size)],
+         "--package", package, "--reference", str(reference), "--size", str(args.size),
+         *perf_args],
         cwd=str(workdir),  # not the repo root, so `import cuda_engine` cannot resolve locally
         check=False,
     )

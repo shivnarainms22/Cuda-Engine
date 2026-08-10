@@ -35,8 +35,31 @@ _DTYPES = {
 }
 
 
+#: How much slower than the original run the exported kernel may be before this is
+#: called a regression. Generous enough to absorb driver/torch differences between
+#: the run and now; a genuine build problem (e.g. losing -O3) is far worse than 25%.
+_PERF_REGRESSION_FACTOR = 1.25
+
+
 class CheckFailed(Exception):
     """A validation step failed."""
+
+
+def _time_ms(torch: Any, call: Any, *, warmup: int, iters: int) -> float:
+    """Median wall time of `call` in milliseconds, with the GPU synchronised."""
+    import time
+
+    for _ in range(max(warmup, 0)):
+        call()
+    torch.cuda.synchronize()
+    samples = []
+    for _ in range(max(iters, 1)):
+        start = time.perf_counter()
+        call()
+        torch.cuda.synchronize()
+        samples.append((time.perf_counter() - start) * 1000.0)
+    samples.sort()
+    return samples[len(samples) // 2]
 
 
 def _assert_clean_process() -> None:
@@ -145,6 +168,21 @@ def main() -> int:
     parser.add_argument("--package", required=True, help="Installed package name, e.g. ce_rms_norm_fp16")
     parser.add_argument("--reference", required=True, type=Path, help="Path to the run's reference.py")
     parser.add_argument("--size", type=int, default=256, help="Size bound to every symbolic dim")
+    parser.add_argument(
+        "--bench-size",
+        type=int,
+        default=None,
+        help="Size bound to every symbolic dim for the perf re-measurement. Omit to skip.",
+    )
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--iters", type=int, default=100)
+    parser.add_argument(
+        "--expect-ms",
+        type=float,
+        default=None,
+        help="custom_ms the original run recorded, for regression comparison.",
+    )
+    parser.add_argument("--expect-eager-ms", type=float, default=None)
     args = parser.parse_args()
 
     _assert_clean_process()
@@ -221,6 +259,42 @@ def main() -> int:
     if not torch.allclose(compiled_out, eager_first, rtol=rtol, atol=atol):
         raise CheckFailed("compiled result differs from eager")
     record("compiled result matches eager")
+
+    # 5. performance: is the kernel you installed still the kernel that was measured?
+    #    VERIFICATION.md inherits its speedup from the original run. Without this,
+    #    an export that builds differently and runs slower passes silently.
+    if args.bench_size is not None:
+        bench_inputs = _make_inputs(torch, spec, args.bench_size, "cuda")
+        bench_expected = reference(*bench_inputs)
+        bench_out = pkg.forward(*bench_inputs)
+        _, b_rel = _err_stats(torch, bench_out, bench_expected)
+        if not _matches(torch, bench_out, bench_expected, rtol=rtol, atol=atol):
+            raise CheckFailed(
+                f"kernel is wrong at the benchmark shape {args.bench_size} "
+                f"(max_rel_err={b_rel:.3g}) -- a speedup here would be meaningless"
+            )
+        record("correct at the benchmark shape", f"size={args.bench_size} max_rel_err={b_rel:.3g}")
+
+        kernel_ms = _time_ms(
+            torch, lambda: pkg.forward(*bench_inputs), warmup=args.warmup, iters=args.iters
+        )
+        eager_ms = _time_ms(
+            torch, lambda: reference(*bench_inputs), warmup=args.warmup, iters=args.iters
+        )
+        detail = f"kernel={kernel_ms:.3f}ms eager={eager_ms:.3f}ms ({eager_ms / kernel_ms:.2f}x)"
+
+        if args.expect_ms is None:
+            record("performance re-measured", detail + " -- no recorded custom_ms to compare")
+        else:
+            ratio = kernel_ms / args.expect_ms
+            detail += f" | run recorded {args.expect_ms:.3f}ms -> {ratio:.2f}x of it"
+            if ratio > _PERF_REGRESSION_FACTOR:
+                raise CheckFailed(
+                    f"exported kernel is {ratio:.2f}x slower than the original run "
+                    f"({kernel_ms:.3f}ms vs {args.expect_ms:.3f}ms); the installed package "
+                    f"is not performing like the one VERIFICATION.md describes. {detail}"
+                )
+            record("performance holds vs the original run", detail)
 
     print(f"\nALL {len(results)} CHECKS PASSED", flush=True)
     return 0

@@ -166,3 +166,77 @@ def test_error_stats_report_relative_not_just_absolute() -> None:
     max_abs, max_rel = h._err_stats(torch, actual, expected)
     assert max_abs > 1e5, "absolute error is large and on its own meaningless"
     assert max_rel < 1e-4, "relative error is the number that matters"
+
+
+# --- perf re-measurement ----------------------------------------------------
+
+
+def test_timing_returns_a_median_not_a_mean(monkeypatch: Any) -> None:
+    """One slow outlier must not dominate the reported time."""
+    h = _harness()
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *a, **k: None)
+    delays = iter([0, 0, 0, 0, 0, 0.02, 0, 0, 0, 0, 0])
+    import time as _time
+
+    def call() -> None:
+        d = next(delays, 0)
+        if d:
+            _time.sleep(d)
+
+    ms = h._time_ms(torch, call, warmup=5, iters=5)
+    assert ms < 5.0, "median should ignore the single 20ms outlier"
+
+
+def test_regression_factor_is_documented_and_generous() -> None:
+    h = _harness()
+    assert 1.1 <= h._PERF_REGRESSION_FACTOR <= 1.5
+
+
+def test_perf_args_are_skipped_when_the_run_has_no_benchmark(tmp_path: Path) -> None:
+    import importlib.util
+
+    path = _CHECK_PATH.parent / "validate_export.py"
+    spec = importlib.util.spec_from_file_location("_validate_export", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module._perf_args(tmp_path) == []
+
+
+def test_perf_args_use_the_engines_own_benchmark_shape(tmp_path: Path) -> None:
+    """Rank-2 spec at 16M elements must yield 4096, the engine's rule -- not a guess."""
+    import importlib.util
+    import json
+
+    (tmp_path / "stage4_performance").mkdir(parents=True)
+    (tmp_path / "stage4_performance" / "benchmark.json").write_text(
+        json.dumps({
+            "custom_ms": 1.5,
+            "settings": {
+                "performance_shape_n": 16_777_216,
+                "benchmark_warmup_iterations": 10,
+                "benchmark_timed_iterations": 100,
+            },
+        })
+    )
+    (tmp_path / "checkpoint.json").write_text(json.dumps({"objects": {"spec": {
+        "name": "m", "target_arch": "sm_80",
+        "inputs": [
+            {"name": "a", "dtype": "fp32", "shape": ["N", "N"], "layout_hint": "any"},
+            {"name": "b", "dtype": "fp32", "shape": ["N", "N"], "layout_hint": "any"},
+        ],
+        "outputs": [{"name": "c", "dtype": "fp32", "shape": ["N", "N"], "layout_hint": "any"}],
+        "precision_tolerance": {"rtol": 1e-3, "atol": 1e-3},
+        "optimization_priority": "throughput", "notes": "",
+    }}}))
+
+    path = _CHECK_PATH.parent / "validate_export.py"
+    spec = importlib.util.spec_from_file_location("_validate_export2", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    args = module._perf_args(tmp_path)
+    assert "--bench-size" in args and args[args.index("--bench-size") + 1] == "4096"
+    assert "--expect-ms" in args and args[args.index("--expect-ms") + 1] == "1.5"
+    assert args[args.index("--iters") + 1] == "100"
