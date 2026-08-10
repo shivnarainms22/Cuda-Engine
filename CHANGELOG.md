@@ -41,6 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     architecture was actually exercised, which shapes, which tolerances, which
     `torch.compile` baseline mode the speedup was measured against, and what was
     not tested at all.
+  - **Hardware-validated on an A100 (2026-08-09):** an exported package builds a
+    wheel, installs, imports with `cuda_engine` absent, JIT-builds its kernel,
+    matches the PyTorch reference, and traces under `torch.compile(fullgraph=True)`.
+    Evidence in `docs/milestones/v2.2-export-evidence.md`; reproduce with
+    `tools/export_validation/validate_export.py` (no API credits).
+  - Validation exposed four defects unreachable from the unit suite: a missing
+    `__main__` guard that made `python -m cuda_engine.cli` exit 0 doing nothing;
+    the export ignoring the run's nvcc flags; wrong kernel-source candidate paths
+    (the accepted path recorded in `checkpoint.json` is now consulted first, which
+    also covers repair/escalation kernels); and an undeclared `ninja` dependency.
 - `ArtifactStore.read_bytes` — binary artifacts are now readable through the
   store interface instead of via a private attribute poke.
 

@@ -165,6 +165,8 @@ It ships the kernel source and JIT-builds on first use (preferring a bundled `.s
 
 `export` **refuses** a run whose correctness gate did not pass. `--force` overrides it but stamps the package `UNVERIFIED`; there is no silent path to an unmarked unverified package.
 
+**This loop is hardware-validated**, not asserted: on an A100, an exported package builds a wheel, installs, imports in a process where `cuda_engine` is absent, JIT-builds its kernel, matches the PyTorch reference, and traces under `torch.compile(fullgraph=True)` — with a control proving the correctness comparison can fail. Evidence, and the four defects that validation exposed, are in [v2.2-export-evidence.md](docs/milestones/v2.2-export-evidence.md). Reproduce it yourself with `tools/export_validation/validate_export.py` (costs no API credits).
+
 ---
 
 ## Why you can trust the numbers
@@ -257,7 +259,7 @@ v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark 
 Merged on `main`, not yet in a PyPI release:
 
 - **GEMM (v2.0).** The fused-epilogue thesis holds: `matmul_bias_gelu_fp16` at **1.25×** vs torch's fused path, correct at 4096². Bare fp16 GEMM vs cuBLAS is explicitly *not* pursued — naive tensor-core GEMM lands around 10% of peak and that was never the goal.
-- **`torch.compile` compatibility + `export`** — the deployability work described above.
+- **`torch.compile` compatibility + `export`** — the deployability work described above, validated end to end on an A100.
 
 ### Honest limits
 
