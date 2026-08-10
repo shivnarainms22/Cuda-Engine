@@ -255,7 +255,9 @@ name = "{dist}"
 version = "0.1.0"
 description = "CUDA kernel {spec.name!r} ({spec.target_arch}), generated and verified by cuda-engine"
 requires-python = ">=3.11"
-dependencies = ["torch>=2.4"]
+# ninja is not optional: the default load path builds kernel.cu from source via
+# torch.utils.cpp_extension, which requires it.
+dependencies = ["torch>=2.4", "ninja"]
 
 [tool.setuptools]
 packages = ["{pkg}"]
@@ -314,13 +316,20 @@ def _load() -> None:
         if not _loaded:
             from torch.utils.cpp_extension import load
 
-            load(
-                name="{pkg}_ext",
-                sources=[str(_HERE / "kernel.cu")],
-                extra_cuda_cflags=list(_NVCC_FLAGS),
-                is_python_module=False,
-                verbose=False,
-            )
+            try:
+                load(
+                    name="{pkg}_ext",
+                    sources=[str(_HERE / "kernel.cu")],
+                    extra_cuda_cflags=list(_NVCC_FLAGS),
+                    is_python_module=False,
+                    verbose=False,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"could not build the kernel from source: {{exc}}\\n"
+                    f"Building needs a CUDA toolchain (nvcc) and ninja. "
+                    f"Try: pip install ninja"
+                ) from exc
             _loaded = True
         try:
             fake_impl.register(_OP_NAME)

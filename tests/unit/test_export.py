@@ -399,3 +399,19 @@ def test_error_names_every_location_that_was_tried() -> None:
     store._files.pop((run_id, "stage5_polish/final/kernel.cu"))
     with pytest.raises(ExportError, match=re.escape("stage2_codegen/final/kernel.cu")):
         build_export(store, run_id)
+
+
+def test_pyproject_declares_ninja_for_the_jit_build_path() -> None:
+    """The default load path is a source build, which requires ninja."""
+    store = InMemoryStore()
+    run_id = _populate(store)
+    data = tomllib.loads(build_export(store, run_id)["pyproject.toml"])
+    deps = " ".join(data["project"]["dependencies"])
+    assert "ninja" in deps
+
+
+def test_loader_explains_how_to_fix_a_missing_build_toolchain() -> None:
+    store = InMemoryStore()
+    run_id = _populate(store)
+    init = build_export(store, run_id)["ce_rms_norm_fp16/__init__.py"]
+    assert "ninja" in init
