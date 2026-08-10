@@ -46,11 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     matches the PyTorch reference, and traces under `torch.compile(fullgraph=True)`.
     Evidence in `docs/milestones/v2.2-export-evidence.md`; reproduce with
     `tools/export_validation/validate_export.py` (no API credits).
-  - Validation exposed four defects unreachable from the unit suite: a missing
+  - **Performance is re-measured on the installed package**, not inherited: the
+    validation rebuilds inputs at the engine's own benchmark shape, verifies
+    correctness there before timing anything, and compares kernel-time against the
+    `custom_ms` the original run recorded. 3/3 kernels within 1.25×.
+  - Validation exposed five defects unreachable from the unit suite: a missing
     `__main__` guard that made `python -m cuda_engine.cli` exit 0 doing nothing;
     the export ignoring the run's nvcc flags; wrong kernel-source candidate paths
     (the accepted path recorded in `checkpoint.json` is now consulted first, which
-    also covers repair/escalation kernels); and an undeclared `ninja` dependency.
+    also covers repair/escalation kernels); an undeclared `ninja` dependency; and a
+    control too weak to fire at GEMM magnitudes, caught by that control refusing to
+    certify a pass it could not distinguish.
 - `ArtifactStore.read_bytes` — binary artifacts are now readable through the
   store interface instead of via a private attribute poke.
 

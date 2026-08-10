@@ -165,7 +165,7 @@ It ships the kernel source and JIT-builds on first use (preferring a bundled `.s
 
 `export` **refuses** a run whose correctness gate did not pass. `--force` overrides it but stamps the package `UNVERIFIED`; there is no silent path to an unmarked unverified package.
 
-**This loop is hardware-validated**, not asserted: on an A100, an exported package builds a wheel, installs, imports in a process where `cuda_engine` is absent, JIT-builds its kernel, matches the PyTorch reference, and traces under `torch.compile(fullgraph=True)` — with a control proving the correctness comparison can fail. Evidence, and the four defects that validation exposed, are in [v2.2-export-evidence.md](docs/milestones/v2.2-export-evidence.md). Reproduce it yourself with `tools/export_validation/validate_export.py` (costs no API credits).
+**This loop is hardware-validated**, not asserted: on an A100, an exported package builds a wheel, installs, imports in a process where `cuda_engine` is absent, JIT-builds its kernel, matches the PyTorch reference, traces under `torch.compile(fullgraph=True)`, and — measured on the installed artifact, not inherited from the run — is correct at the benchmark shape and still within 1.25× of the kernel time its original run recorded. A control proves the correctness comparison can fail. Evidence, and the five defects that validation exposed (including one in the checker itself), are in [v2.2-export-evidence.md](docs/milestones/v2.2-export-evidence.md). Reproduce it with `tools/export_validation/validate_export.py` — costs no API credits.
 
 ---
 
