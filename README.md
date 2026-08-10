@@ -49,7 +49,7 @@ Each `synthesize()` call produces a run directory under `~/.cache/cuda_engine/ru
 Requires Python 3.11+, CUDA 12.x toolchain (`nvcc`), PyTorch 2.4+, and an A100-class GPU for end-to-end runs.
 
 ```bash
-pip install cuda-engine    # post-v1.0 release
+pip install cuda-engine
 # or, from source:
 git clone https://github.com/shivnarainms22/Cuda-Engine.git
 cd Cuda-Engine
@@ -254,16 +254,24 @@ v1.1 added 12 more in-scope kernels (suite → 42) and the ability to benchmark 
 
 ## Status
 
-**v1.2 released** ([PyPI](https://pypi.org/project/cuda-engine/)). v1.0 shipped the full 5-stage loop (A100-verified); v1.1 added pluggable LLM providers and a bound-aware perf-repair loop; v1.2 added synthesis-stage resumability and cross-provider comparison.
+**v1.3 released** ([PyPI](https://pypi.org/project/cuda-engine/)) — `pip install cuda-engine`.
 
-Merged on `main`, not yet in a PyPI release:
+| | |
+|---|---|
+| v1.0 | the full 5-stage loop, A100-verified |
+| v1.1 | pluggable LLM providers, bound-aware perf-repair loop |
+| v1.2 | synthesis-stage resumability, cross-provider comparison |
+| **v1.3** | **`torch.compile` compatibility + `export`** — deployable kernels, validated end to end on an A100 |
 
-- **GEMM (v2.0).** The fused-epilogue thesis holds: `matmul_bias_gelu_fp16` at **1.25×** vs torch's fused path, correct at 4096². Bare fp16 GEMM vs cuBLAS is explicitly *not* pursued — naive tensor-core GEMM lands around 10% of peak and that was never the goal.
-- **`torch.compile` compatibility + `export`** — the deployability work described above, validated end to end on an A100.
+Also merged on `main` but deliberately **not** a released capability:
+
+- **GEMM (v2.0).** The fused-epilogue thesis holds: `matmul_bias_gelu_fp16` at **1.25×** vs torch's fused path, correct at 4096². Bare fp16 GEMM vs cuBLAS is explicitly *not* pursued — naive tensor-core GEMM lands around 10% of peak and that was never the goal. It ships as eval fixtures and measurement integrity, not as a user-facing feature.
 
 ### Honest limits
 
 - Runtime verification is **sm_80 (A100) only**. `sm_90`/`sm_100` are codegen targets that have never been executed. If you are on Blackwell, treat this as unverified.
+- **Export is validated on GEMM kernels only** so far. Elementwise and reduction kernels — the engine's actual strength — have not yet been put through the export loop.
+- One exported package per process: the op is registered under a fixed `cuda_engine::forward` namespace, so two exported kernels collide.
 - Synthesis costs API tokens (~$0.10–2.00 per kernel) and needs a GPU with `nvcc`.
 - Bandwidth-bound elementwise ops sit at parity — `torch.compile` is already at the HBM roofline there, so ~1.0× is the physical ceiling, not a defect. Real wins come from reductions, scans, and fusions.
 - Forward pass only. No autograd formulas are generated.
@@ -298,7 +306,7 @@ Per-kernel envelope under default config:
 | Hard kernel | ~$0.30–0.80 |
 | With Opus escalation | ~$0.80–2.00 |
 
-Full eval suite (30 kernels): ~$5–20 depending on retries. See [`docs/cost.md`](docs/cost.md) for the per-stage breakdown and the four config knobs to bound spend.
+Full internal eval suite (42 kernels): ~$7–28 depending on retries. See [`docs/cost.md`](docs/cost.md) for the per-stage breakdown and the four config knobs to bound spend.
 
 ---
 
